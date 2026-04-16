@@ -1,0 +1,29 @@
+{
+  "expo": {
+    "name": "TradeGuard",
+    "slug": "tradeguard",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "splash": {
+      "backgroundColor": "#0a0e1a"
+    },
+    "assetBundlePatterns": ["**/*"],
+    "ios": {
+      "supportsTablet": false
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#0a0e1a"
+      },
+      "package": "tech.tradegard.app",
+      "permissions": ["NOTIFICATIONS", "RECEIVE_BOOT_COMPLETED"]
+    },
+    "plugins": [
+      "expo-notifications",
+      "expo-font"
+    ]
+  }
+}
