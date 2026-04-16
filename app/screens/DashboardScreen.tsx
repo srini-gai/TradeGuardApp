@@ -25,32 +25,8 @@ import {
   runScreener,
   scanIntraday,
 } from '../services/api'
+import { getIST, isMarketOpen, formatISTDate, isPastCutoffWarning } from '../utils/time'
 import SignalCard from '../components/SignalCard'
-
-// ─── IST helpers ────────────────────────────────────────────────────────────
-
-function getIST(): Date {
-  const now = new Date()
-  const utcMs = now.getTime() + now.getTimezoneOffset() * 60000
-  return new Date(utcMs + 19800000) // +5h30m
-}
-
-function isMarketOpen(): boolean {
-  const ist = getIST()
-  const day = ist.getDay()
-  if (day === 0 || day === 6) return false
-  const mins = ist.getHours() * 60 + ist.getMinutes()
-  return mins >= 555 && mins <= 930 // 9:15–15:30
-}
-
-function formatISTDate(d: Date): string {
-  return d.toLocaleDateString('en-IN', {
-    weekday: 'short',
-    day: 'numeric',
-    month: 'short',
-    year: 'numeric',
-  })
-}
 
 function formatPnL(value: number): string {
   const sign = value >= 0 ? '+' : ''
@@ -92,8 +68,7 @@ function MetricCard({
 }
 
 function RiskPanel({ risk }: { risk: RiskStatus }) {
-  const ist = getIST()
-  const pastCutoff = ist.getHours() * 60 + ist.getMinutes() >= 810 // 13:30
+  const pastCutoff = isPastCutoffWarning()
 
   return (
     <View style={[riskStyles.panel, { borderLeftColor: risk.trading_window_open ? colors.bull : colors.bear }]}>
