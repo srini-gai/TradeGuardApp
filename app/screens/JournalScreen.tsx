@@ -1,44 +1,1018 @@
-import React from 'react'
-import { View, Text, StyleSheet } from 'react-native'
+import React, { useState, useEffect, useCallback } from 'react'
+import {
+  View,
+  Text,
+  StyleSheet,
+  FlatList,
+  TouchableOpacity,
+  Modal,
+  TextInput,
+  KeyboardAvoidingView,
+  Platform,
+  ActivityIndicator,
+  RefreshControl,
+  ScrollView,
+  Alert,
+  Pressable,
+} from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { colors } from '../constants'
+import {
+  getTrades,
+  getMonthlySummary,
+  logTrade,
+  bookLevel as bookLevelApi,
+} from '../services/api'
+import type { Trade, MonthlySummary, TradeCreate } from '../types'
+import TradeRow, { BookLevel } from '../components/TradeRow'
 
-export default function JournalScreen() {
+// ─── Types ─────────────────────────────────────────────────────────────────────
+
+type FilterKey = 'ALL' | 'OPEN' | 'CLOSED' | 'SL_HIT'
+
+const FILTERS: { key: FilterKey; label: string }[] = [
+  { key: 'ALL', label: 'All' },
+  { key: 'OPEN', label: 'Open' },
+  { key: 'CLOSED', label: 'Closed' },
+  { key: 'SL_HIT', label: 'SL Hit' },
+]
+
+// ─── Helpers ───────────────────────────────────────────────────────────────────
+
+function formatPnL(value: number): string {
+  const sign = value >= 0 ? '+' : ''
+  return `${sign}₹${Math.abs(value).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`
+}
+
+function filterMatchesStatus(trade: Trade, key: FilterKey): boolean {
+  if (key === 'ALL') return true
+  if (key === 'SL_HIT') return trade.status === 'SL_HIT'
+  return trade.status === key
+}
+
+function countByFilter(trades: Trade[], key: FilterKey): number {
+  return trades.filter(t => filterMatchesStatus(t, key)).length
+}
+
+// ─── Summary Header ────────────────────────────────────────────────────────────
+
+function SummaryHeader({ summary }: { summary: MonthlySummary }) {
+  const pnlColor = summary.total_pnl >= 0 ? colors.bull : colors.bear
+  const winColor =
+    summary.win_rate >= 60 ? colors.bull
+    : summary.win_rate >= 40 ? colors.warn
+    : colors.bear
+
   return (
-    <SafeAreaView style={styles.safe}>
-      <View style={styles.container}>
-        <Text style={styles.title}>Journal</Text>
-        <Text style={styles.sub}>Trade log + P&amp;L</Text>
-        <View style={styles.card}>
-          <Text style={styles.label}>Phase 5</Text>
-          <Text style={styles.value}>Trade journal coming soon</Text>
-          <Text style={styles.note}>Log trades, book partial profits, track P&amp;L</Text>
+    <View style={summaryStyles.card}>
+      <Text style={summaryStyles.period}>{summary.period}</Text>
+      <View style={summaryStyles.statsRow}>
+        <View style={summaryStyles.stat}>
+          <Text style={summaryStyles.statLabel}>Month P&L</Text>
+          <Text style={[summaryStyles.statValue, { color: pnlColor }]}>
+            {formatPnL(summary.total_pnl)}
+          </Text>
+        </View>
+        <View style={summaryStyles.sep} />
+        <View style={summaryStyles.stat}>
+          <Text style={summaryStyles.statLabel}>Win Rate</Text>
+          <Text style={[summaryStyles.statValue, { color: winColor }]}>
+            {summary.win_rate.toFixed(1)}%
+          </Text>
+        </View>
+        <View style={summaryStyles.sep} />
+        <View style={summaryStyles.stat}>
+          <Text style={summaryStyles.statLabel}>Open</Text>
+          <Text style={summaryStyles.statValue}>{summary.open_trades}</Text>
+        </View>
+        <View style={summaryStyles.sep} />
+        <View style={summaryStyles.stat}>
+          <Text style={summaryStyles.statLabel}>Total</Text>
+          <Text style={summaryStyles.statValue}>{summary.total_trades}</Text>
         </View>
       </View>
+    </View>
+  )
+}
+
+// ─── Log Trade Modal ───────────────────────────────────────────────────────────
+
+interface LogTradeModalProps {
+  visible: boolean
+  onClose: () => void
+  onSubmit: (payload: TradeCreate) => Promise<void>
+}
+
+function LogTradeModal({ visible, onClose, onSubmit }: LogTradeModalProps) {
+  const [symbol, setSymbol] = useState('')
+  const [direction, setDirection] = useState<'CE' | 'PE'>('CE')
+  const [strike, setStrike] = useState('')
+  const [expiry, setExpiry] = useState('')
+  const [entryPremium, setEntryPremium] = useState('')
+  const [lots, setLots] = useState('1')
+  const [lotSize, setLotSize] = useState('50')
+  const [submitting, setSubmitting] = useState(false)
+
+  const entryNum = parseFloat(entryPremium) || 0
+  const autoSL = entryNum > 0 ? parseFloat((entryNum * 0.5).toFixed(1)) : 0
+  const autoT1 = entryNum > 0 ? parseFloat((entryNum * 1.5).toFixed(1)) : 0
+  const autoT2 = entryNum > 0 ? parseFloat((entryNum * 2.0).toFixed(1)) : 0
+  const autoT3 = entryNum > 0 ? parseFloat((entryNum * 3.0).toFixed(1)) : 0
+
+  function reset() {
+    setSymbol('')
+    setDirection('CE')
+    setStrike('')
+    setExpiry('')
+    setEntryPremium('')
+    setLots('1')
+    setLotSize('50')
+  }
+
+  async function handleSubmit() {
+    if (!symbol.trim() || !strike || !expiry.trim() || !entryPremium) {
+      Alert.alert('Missing fields', 'Symbol, Strike, Expiry and Entry Premium are required.')
+      return
+    }
+    const strikeNum = parseInt(strike, 10)
+    if (isNaN(strikeNum) || strikeNum <= 0) {
+      Alert.alert('Invalid input', 'Strike must be a positive number.')
+      return
+    }
+    if (isNaN(entryNum) || entryNum <= 0) {
+      Alert.alert('Invalid input', 'Entry premium must be a positive number.')
+      return
+    }
+    setSubmitting(true)
+    try {
+      await onSubmit({
+        symbol: symbol.trim().toUpperCase(),
+        direction,
+        strike: strikeNum,
+        expiry: expiry.trim().toUpperCase(),
+        entry_premium: entryNum,
+        lots: Math.max(1, parseInt(lots, 10) || 1),
+        lot_size: Math.max(1, parseInt(lotSize, 10) || 50),
+        sl_premium: autoSL,
+        t1_premium: autoT1,
+        t2_premium: autoT2,
+        t3_premium: autoT3,
+      })
+      reset()
+    } catch {
+      Alert.alert('Error', 'Failed to log trade. Please try again.')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  const autoLevels = [
+    { label: 'SL', value: autoSL, color: colors.bear },
+    { label: 'T1', value: autoT1, color: colors.accent },
+    { label: 'T2', value: autoT2, color: colors.accent },
+    { label: 'T3', value: autoT3, color: colors.bull },
+  ]
+
+  return (
+    <Modal
+      visible={visible}
+      transparent
+      animationType="slide"
+      onRequestClose={onClose}
+    >
+      <Pressable style={logStyles.backdrop} onPress={onClose} />
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        style={logStyles.kvWrapper}
+        keyboardVerticalOffset={0}
+      >
+        <View style={logStyles.sheet}>
+          <View style={logStyles.handle} />
+          <Text style={logStyles.sheetTitle}>Log New Trade</Text>
+
+          <ScrollView
+            showsVerticalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+          >
+            <Text style={logStyles.fieldLabel}>Symbol</Text>
+            <TextInput
+              style={logStyles.input}
+              value={symbol}
+              onChangeText={v => setSymbol(v.toUpperCase())}
+              placeholder="e.g. RELIANCE"
+              placeholderTextColor={colors.muted}
+              autoCapitalize="characters"
+              returnKeyType="next"
+            />
+
+            <Text style={logStyles.fieldLabel}>Direction</Text>
+            <View style={logStyles.toggle}>
+              <TouchableOpacity
+                style={[
+                  logStyles.toggleBtn,
+                  direction === 'CE' && logStyles.toggleActiveCE,
+                ]}
+                onPress={() => setDirection('CE')}
+                activeOpacity={0.8}
+              >
+                <Text style={[
+                  logStyles.toggleText,
+                  direction === 'CE' && logStyles.toggleTextCE,
+                ]}>
+                  CE
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  logStyles.toggleBtn,
+                  direction === 'PE' && logStyles.toggleActivePE,
+                ]}
+                onPress={() => setDirection('PE')}
+                activeOpacity={0.8}
+              >
+                <Text style={[
+                  logStyles.toggleText,
+                  direction === 'PE' && logStyles.toggleTextPE,
+                ]}>
+                  PE
+                </Text>
+              </TouchableOpacity>
+            </View>
+
+            <View style={logStyles.row2}>
+              <View style={logStyles.half}>
+                <Text style={logStyles.fieldLabel}>Strike</Text>
+                <TextInput
+                  style={logStyles.input}
+                  value={strike}
+                  onChangeText={setStrike}
+                  placeholder="e.g. 2500"
+                  placeholderTextColor={colors.muted}
+                  keyboardType="numeric"
+                />
+              </View>
+              <View style={logStyles.half}>
+                <Text style={logStyles.fieldLabel}>Expiry</Text>
+                <TextInput
+                  style={logStyles.input}
+                  value={expiry}
+                  onChangeText={v => setExpiry(v.toUpperCase())}
+                  placeholder="e.g. 25JAN"
+                  placeholderTextColor={colors.muted}
+                  autoCapitalize="characters"
+                />
+              </View>
+            </View>
+
+            <Text style={logStyles.fieldLabel}>Entry Premium</Text>
+            <TextInput
+              style={logStyles.input}
+              value={entryPremium}
+              onChangeText={setEntryPremium}
+              placeholder="e.g. 120"
+              placeholderTextColor={colors.muted}
+              keyboardType="decimal-pad"
+            />
+
+            {entryNum > 0 && (
+              <View style={logStyles.autoBox}>
+                <Text style={logStyles.autoTitle}>Auto-calculated levels</Text>
+                <View style={logStyles.autoRow}>
+                  {autoLevels.map(l => (
+                    <View key={l.label} style={logStyles.autoItem}>
+                      <Text style={[logStyles.autoItemLabel, { color: l.color }]}>
+                        {l.label}
+                      </Text>
+                      <Text style={[logStyles.autoItemValue, { color: l.color }]}>
+                        ₹{l.value}
+                      </Text>
+                    </View>
+                  ))}
+                </View>
+              </View>
+            )}
+
+            <View style={logStyles.row2}>
+              <View style={logStyles.half}>
+                <Text style={logStyles.fieldLabel}>Lots</Text>
+                <TextInput
+                  style={logStyles.input}
+                  value={lots}
+                  onChangeText={setLots}
+                  keyboardType="numeric"
+                />
+              </View>
+              <View style={logStyles.half}>
+                <Text style={logStyles.fieldLabel}>Lot Size</Text>
+                <TextInput
+                  style={logStyles.input}
+                  value={lotSize}
+                  onChangeText={setLotSize}
+                  keyboardType="numeric"
+                />
+              </View>
+            </View>
+
+            <View style={{ height: 16 }} />
+
+            <TouchableOpacity
+              style={[logStyles.submitBtn, submitting && logStyles.submitBtnDisabled]}
+              onPress={handleSubmit}
+              disabled={submitting}
+              activeOpacity={0.8}
+            >
+              {submitting
+                ? <ActivityIndicator size="small" color={colors.bg} />
+                : <Text style={logStyles.submitText}>Log Trade</Text>
+              }
+            </TouchableOpacity>
+
+            <View style={{ height: 32 }} />
+          </ScrollView>
+        </View>
+      </KeyboardAvoidingView>
+    </Modal>
+  )
+}
+
+// ─── Booking Modal ─────────────────────────────────────────────────────────────
+
+interface BookingModalProps {
+  visible: boolean
+  level: BookLevel | null
+  suggestedPrice: number | null
+  onClose: () => void
+  onConfirm: (exitPremium: number) => Promise<void>
+}
+
+function BookingModal({
+  visible,
+  level,
+  suggestedPrice,
+  onClose,
+  onConfirm,
+}: BookingModalProps) {
+  const [exitInput, setExitInput] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+
+  useEffect(() => {
+    if (visible && suggestedPrice !== null) {
+      setExitInput(suggestedPrice.toString())
+    }
+    if (!visible) setExitInput('')
+  }, [visible, suggestedPrice])
+
+  const isSL = level === 'SL'
+  const accentColor = isSL ? colors.bear : colors.accent
+
+  async function handleConfirm() {
+    const val = parseFloat(exitInput)
+    if (isNaN(val) || val <= 0) {
+      Alert.alert('Invalid', 'Please enter a valid exit premium.')
+      return
+    }
+    setSubmitting(true)
+    try {
+      await onConfirm(val)
+    } catch {
+      Alert.alert('Error', 'Booking failed. Please try again.')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  return (
+    <Modal
+      visible={visible}
+      transparent
+      animationType="slide"
+      onRequestClose={onClose}
+    >
+      <Pressable style={bookStyles.backdrop} onPress={onClose} />
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        style={bookStyles.kvWrapper}
+        keyboardVerticalOffset={0}
+      >
+        <View style={bookStyles.sheet}>
+          <View style={bookStyles.handle} />
+          <Text style={bookStyles.title}>
+            Book {level ?? ''}
+          </Text>
+          <Text style={bookStyles.subtitle}>Enter exit premium</Text>
+
+          <TextInput
+            style={[bookStyles.input, { borderColor: accentColor }]}
+            value={exitInput}
+            onChangeText={setExitInput}
+            placeholder="Exit premium"
+            placeholderTextColor={colors.muted}
+            keyboardType="decimal-pad"
+            autoFocus={visible}
+          />
+
+          {suggestedPrice !== null && (
+            <Text style={[bookStyles.suggestion, { color: accentColor }]}>
+              Target: ₹{suggestedPrice}
+            </Text>
+          )}
+
+          <View style={bookStyles.btnRow}>
+            <TouchableOpacity
+              style={bookStyles.cancelBtn}
+              onPress={onClose}
+              activeOpacity={0.8}
+            >
+              <Text style={bookStyles.cancelText}>Cancel</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[
+                bookStyles.confirmBtn,
+                { backgroundColor: accentColor },
+                submitting && bookStyles.confirmBtnDisabled,
+              ]}
+              onPress={handleConfirm}
+              disabled={submitting}
+              activeOpacity={0.8}
+            >
+              {submitting
+                ? <ActivityIndicator size="small" color={colors.bg} />
+                : <Text style={bookStyles.confirmText}>Confirm</Text>
+              }
+            </TouchableOpacity>
+          </View>
+
+          <View style={{ height: 24 }} />
+        </View>
+      </KeyboardAvoidingView>
+    </Modal>
+  )
+}
+
+// ─── Main Screen ───────────────────────────────────────────────────────────────
+
+export default function JournalScreen() {
+  const [trades, setTrades] = useState<Trade[]>([])
+  const [summary, setSummary] = useState<MonthlySummary | null>(null)
+  const [filter, setFilter] = useState<FilterKey>('ALL')
+  const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
+
+  const [logModalVisible, setLogModalVisible] = useState(false)
+
+  const [bookModalVisible, setBookModalVisible] = useState(false)
+  const [pendingTrade, setPendingTrade] = useState<Trade | null>(null)
+  const [pendingLevel, setPendingLevel] = useState<BookLevel | null>(null)
+  const [pendingSuggested, setPendingSuggested] = useState<number | null>(null)
+
+  const loadData = useCallback(async () => {
+    const [tradesRes, summaryRes] = await Promise.allSettled([
+      getTrades(),
+      getMonthlySummary(),
+    ])
+    if (tradesRes.status === 'fulfilled') {
+      const sorted = [...tradesRes.value].sort(
+        (a, b) => new Date(b.entry_date).getTime() - new Date(a.entry_date).getTime(),
+      )
+      setTrades(sorted)
+    }
+    if (summaryRes.status === 'fulfilled') setSummary(summaryRes.value)
+  }, [])
+
+  useEffect(() => {
+    loadData().finally(() => setLoading(false))
+  }, [loadData])
+
+  const handleRefresh = useCallback(() => {
+    setRefreshing(true)
+    loadData().finally(() => setRefreshing(false))
+  }, [loadData])
+
+  const filteredTrades = trades.filter(t => filterMatchesStatus(t, filter))
+
+  const handleBook = useCallback(
+    (tradeId: number, level: BookLevel, targetPrice: number) => {
+      const trade = trades.find(t => t.id === tradeId) ?? null
+      setPendingTrade(trade)
+      setPendingLevel(level)
+      setPendingSuggested(targetPrice)
+      setBookModalVisible(true)
+    },
+    [trades],
+  )
+
+  const handleBookConfirm = useCallback(
+    async (exitPremium: number) => {
+      if (!pendingTrade || !pendingLevel) return
+      const updated = await bookLevelApi(pendingTrade.id, pendingLevel, exitPremium)
+      setTrades(prev => prev.map(t => (t.id === updated.id ? updated : t)))
+      setBookModalVisible(false)
+      setPendingTrade(null)
+      setPendingLevel(null)
+      setPendingSuggested(null)
+      getMonthlySummary().then(setSummary).catch(() => null)
+    },
+    [pendingTrade, pendingLevel],
+  )
+
+  const handleLogSubmit = useCallback(async (payload: TradeCreate) => {
+    const newTrade = await logTrade(payload)
+    setTrades(prev => [newTrade, ...prev])
+    setLogModalVisible(false)
+    getMonthlySummary().then(setSummary).catch(() => null)
+  }, [])
+
+  const listHeader = (
+    <>
+      {summary && <SummaryHeader summary={summary} />}
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        style={styles.filterScroll}
+        contentContainerStyle={styles.filterContent}
+      >
+        {FILTERS.map(f => {
+          const count = countByFilter(trades, f.key)
+          const isActive = filter === f.key
+          return (
+            <TouchableOpacity
+              key={f.key}
+              style={[styles.filterTab, isActive && styles.filterTabActive]}
+              onPress={() => setFilter(f.key)}
+              activeOpacity={0.8}
+            >
+              <Text style={[styles.filterText, isActive && styles.filterTextActive]}>
+                {f.label}{' '}
+                <Text style={[styles.filterCount, isActive && styles.filterCountActive]}>
+                  {count}
+                </Text>
+              </Text>
+            </TouchableOpacity>
+          )
+        })}
+      </ScrollView>
+    </>
+  )
+
+  const listEmpty = (
+    <View style={styles.empty}>
+      <Text style={styles.emptyTitle}>No trades</Text>
+      <Text style={styles.emptyText}>
+        {filter === 'ALL'
+          ? 'Tap + to log your first trade'
+          : `No ${filter === 'SL_HIT' ? 'SL hit' : filter.toLowerCase()} trades`}
+      </Text>
+    </View>
+  )
+
+  return (
+    <SafeAreaView style={styles.safe}>
+      <View style={styles.header}>
+        <Text style={styles.title}>Journal</Text>
+        <Text style={styles.headerSub}>
+          {trades.length} trade{trades.length !== 1 ? 's' : ''}
+        </Text>
+      </View>
+
+      {loading ? (
+        <View style={styles.loadingCenter}>
+          <ActivityIndicator size="large" color={colors.accent} />
+          <Text style={styles.loadingText}>Loading journal…</Text>
+        </View>
+      ) : (
+        <>
+          <FlatList
+            data={filteredTrades}
+            keyExtractor={item => item.id.toString()}
+            renderItem={({ item }) => <TradeRow trade={item} onBook={handleBook} />}
+            contentContainerStyle={styles.listContent}
+            refreshControl={
+              <RefreshControl
+                refreshing={refreshing}
+                onRefresh={handleRefresh}
+                tintColor={colors.accent}
+                colors={[colors.accent]}
+              />
+            }
+            ListHeaderComponent={listHeader}
+            ListEmptyComponent={listEmpty}
+            showsVerticalScrollIndicator={false}
+          />
+
+          <TouchableOpacity
+            style={styles.fab}
+            onPress={() => setLogModalVisible(true)}
+            activeOpacity={0.85}
+          >
+            <Text style={styles.fabIcon}>+</Text>
+          </TouchableOpacity>
+        </>
+      )}
+
+      <LogTradeModal
+        visible={logModalVisible}
+        onClose={() => setLogModalVisible(false)}
+        onSubmit={handleLogSubmit}
+      />
+      <BookingModal
+        visible={bookModalVisible}
+        level={pendingLevel}
+        suggestedPrice={pendingSuggested}
+        onClose={() => setBookModalVisible(false)}
+        onConfirm={handleBookConfirm}
+      />
     </SafeAreaView>
   )
 }
 
+// ─── Styles ────────────────────────────────────────────────────────────────────
+
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: colors.bg },
-  container: { flex: 1, padding: 16 },
-  title: { fontSize: 22, fontWeight: '600', color: colors.text, marginBottom: 4 },
-  sub: { fontSize: 12, color: colors.subtext, marginBottom: 20 },
+  safe: {
+    flex: 1,
+    backgroundColor: colors.bg,
+  },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    gap: 8,
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    paddingBottom: 10,
+    borderBottomWidth: 0.5,
+    borderBottomColor: colors.border,
+  },
+  title: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: colors.text,
+    letterSpacing: 0.2,
+  },
+  headerSub: {
+    fontSize: 12,
+    color: colors.muted,
+  },
+  loadingCenter: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 12,
+  },
+  loadingText: {
+    fontSize: 13,
+    color: colors.subtext,
+  },
+  listContent: {
+    padding: 16,
+    paddingBottom: 96,
+  },
+  filterScroll: {
+    marginBottom: 14,
+  },
+  filterContent: {
+    gap: 8,
+    paddingRight: 4,
+  },
+  filterTab: {
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+    borderRadius: 20,
+    backgroundColor: colors.surface,
+    borderWidth: 0.5,
+    borderColor: colors.border,
+  },
+  filterTabActive: {
+    backgroundColor: 'rgba(0,212,170,0.12)',
+    borderColor: colors.accent,
+  },
+  filterText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: colors.muted,
+  },
+  filterTextActive: {
+    color: colors.accent,
+  },
+  filterCount: {
+    fontSize: 11,
+    color: colors.muted,
+  },
+  filterCountActive: {
+    color: colors.accent,
+  },
+  empty: {
+    alignItems: 'center',
+    paddingVertical: 48,
+  },
+  emptyTitle: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: colors.subtext,
+    marginBottom: 6,
+  },
+  emptyText: {
+    fontSize: 12,
+    color: colors.muted,
+    textAlign: 'center',
+  },
+  fab: {
+    position: 'absolute',
+    bottom: 24,
+    right: 20,
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: colors.accent,
+    alignItems: 'center',
+    justifyContent: 'center',
+    elevation: 6,
+    shadowColor: colors.accent,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.4,
+    shadowRadius: 8,
+  },
+  fabIcon: {
+    fontSize: 28,
+    color: colors.bg,
+    fontWeight: '300',
+    lineHeight: 32,
+  },
+})
+
+const summaryStyles = StyleSheet.create({
   card: {
     backgroundColor: colors.card,
     borderRadius: 12,
     padding: 14,
-    marginBottom: 12,
-    borderLeftWidth: 3,
-    borderLeftColor: colors.accent,
+    marginBottom: 14,
+    borderWidth: 0.5,
+    borderColor: colors.border,
   },
-  label: {
-    fontSize: 11,
-    color: colors.subtext,
+  period: {
+    fontSize: 10,
+    color: colors.muted,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+    marginBottom: 10,
+  },
+  statsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  stat: {
+    flex: 1,
+    alignItems: 'center',
+  },
+  statLabel: {
+    fontSize: 9,
+    color: colors.muted,
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
     marginBottom: 4,
+  },
+  statValue: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: colors.text,
+  },
+  sep: {
+    width: 0.5,
+    height: 32,
+    backgroundColor: colors.border,
+  },
+})
+
+const logStyles = StyleSheet.create({
+  backdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+  },
+  kvWrapper: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+  },
+  sheet: {
+    backgroundColor: colors.surface,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    paddingHorizontal: 20,
+    paddingTop: 10,
+    maxHeight: '90%',
+  },
+  handle: {
+    alignSelf: 'center',
+    width: 36,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: colors.border,
+    marginBottom: 16,
+  },
+  sheetTitle: {
+    fontSize: 17,
+    fontWeight: '700',
+    color: colors.text,
+    marginBottom: 18,
+  },
+  fieldLabel: {
+    fontSize: 10,
+    color: colors.muted,
     textTransform: 'uppercase',
     letterSpacing: 0.5,
+    marginBottom: 6,
+    marginTop: 12,
   },
-  value: { fontSize: 14, color: colors.text, fontWeight: '500' },
-  note: { fontSize: 12, color: colors.subtext, marginTop: 4 },
+  input: {
+    backgroundColor: colors.card,
+    borderRadius: 10,
+    borderWidth: 0.5,
+    borderColor: colors.border,
+    paddingHorizontal: 14,
+    paddingVertical: 11,
+    fontSize: 14,
+    color: colors.text,
+  },
+  toggle: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  toggleBtn: {
+    flex: 1,
+    paddingVertical: 11,
+    borderRadius: 10,
+    alignItems: 'center',
+    backgroundColor: colors.card,
+    borderWidth: 0.5,
+    borderColor: colors.border,
+  },
+  toggleActiveCE: {
+    backgroundColor: 'rgba(34,197,94,0.12)',
+    borderColor: colors.bull,
+  },
+  toggleActivePE: {
+    backgroundColor: 'rgba(239,68,68,0.12)',
+    borderColor: colors.bear,
+  },
+  toggleText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: colors.muted,
+    letterSpacing: 0.5,
+  },
+  toggleTextCE: {
+    color: colors.bull,
+  },
+  toggleTextPE: {
+    color: colors.bear,
+  },
+  row2: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  half: {
+    flex: 1,
+  },
+  autoBox: {
+    backgroundColor: colors.card,
+    borderRadius: 10,
+    padding: 12,
+    marginTop: 10,
+    borderWidth: 0.5,
+    borderColor: colors.border,
+  },
+  autoTitle: {
+    fontSize: 9,
+    color: colors.muted,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    marginBottom: 8,
+  },
+  autoRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
+  autoItem: {
+    alignItems: 'center',
+    flex: 1,
+  },
+  autoItemLabel: {
+    fontSize: 9,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+    marginBottom: 3,
+  },
+  autoItemValue: {
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  submitBtn: {
+    backgroundColor: colors.accent,
+    borderRadius: 12,
+    paddingVertical: 15,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 50,
+  },
+  submitBtnDisabled: {
+    opacity: 0.6,
+  },
+  submitText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: colors.bg,
+    letterSpacing: 0.2,
+  },
+})
+
+const bookStyles = StyleSheet.create({
+  backdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+  },
+  kvWrapper: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+  },
+  sheet: {
+    backgroundColor: colors.surface,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    paddingHorizontal: 20,
+    paddingTop: 10,
+  },
+  handle: {
+    alignSelf: 'center',
+    width: 36,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: colors.border,
+    marginBottom: 16,
+  },
+  title: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: colors.text,
+    marginBottom: 4,
+  },
+  subtitle: {
+    fontSize: 12,
+    color: colors.subtext,
+    marginBottom: 18,
+  },
+  input: {
+    backgroundColor: colors.card,
+    borderRadius: 10,
+    borderWidth: 1.5,
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+    fontSize: 22,
+    fontWeight: '600',
+    color: colors.text,
+    textAlign: 'center',
+    marginBottom: 8,
+  },
+  suggestion: {
+    fontSize: 11,
+    textAlign: 'center',
+    marginBottom: 20,
+  },
+  btnRow: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  cancelBtn: {
+    flex: 1,
+    paddingVertical: 14,
+    borderRadius: 12,
+    alignItems: 'center',
+    backgroundColor: colors.card,
+    borderWidth: 0.5,
+    borderColor: colors.border,
+  },
+  cancelText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: colors.muted,
+  },
+  confirmBtn: {
+    flex: 2,
+    paddingVertical: 14,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 50,
+  },
+  confirmBtnDisabled: {
+    opacity: 0.6,
+  },
+  confirmText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: colors.bg,
+    letterSpacing: 0.2,
+  },
 })
