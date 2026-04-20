@@ -8,20 +8,27 @@ import {
   ScrollView,
   StyleSheet,
   ActivityIndicator,
+  Alert,
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { colors } from '../constants'
-import { getNifty500, analyseSymbol, getStrikes } from '../services/api'
+import { getNifty500, analyseSymbol, getStrikes, logTrade } from '../services/api'
 import type { Nifty500Symbol, StockAnalysis } from '../types'
 import SignalCard from '../components/SignalCard'
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
+
+interface StrikeLtp {
+  ce_ltp: number
+  pe_ltp: number
+}
 
 interface StrikesData {
   strikes: number[]
   atmStrike: number | null
   currentPrice: number | null
   expiry: string | null
+  ltpMap: Record<number, StrikeLtp>
 }
 
 interface PremiumLadder {
@@ -35,45 +42,72 @@ interface PremiumLadder {
 // ─── Helpers ───────────────────────────────────────────────────────────────────
 
 function parseStrikesResponse(raw: unknown): StrikesData {
-  if (!raw || typeof raw !== 'object') {
-    return { strikes: [], atmStrike: null, currentPrice: null, expiry: null }
-  }
-  const d = raw as Record<string, unknown>
+  const empty: StrikesData = { strikes: [], atmStrike: null, currentPrice: null, expiry: null, ltpMap: {} }
+  if (!raw || typeof raw !== 'object') return empty
 
+  const d = raw as Record<string, unknown>
   let strikes: number[] = []
+  const ltpMap: Record<number, StrikeLtp> = {}
 
   if (Array.isArray(d.strikes)) {
-    // Number array: [2400, 2420, ...]
-    const asNums = d.strikes.filter((s): s is number => typeof s === 'number')
-    if (asNums.length > 0) {
-      strikes = asNums
-    } else {
+    const first = d.strikes[0]
+    if (first !== null && typeof first === 'object') {
+      // Actual API format: [{strike, ce_ltp, pe_ltp}, ...]
+      const rows = d.strikes as Array<Record<string, unknown>>
+      for (const row of rows) {
+        const num = typeof row.strike === 'number' ? row.strike : parseInt(String(row.strike), 10)
+        if (!isNaN(num)) {
+          strikes.push(num)
+          ltpMap[num] = {
+            ce_ltp: typeof row.ce_ltp === 'number' ? row.ce_ltp : 0,
+            pe_ltp: typeof row.pe_ltp === 'number' ? row.pe_ltp : 0,
+          }
+        }
+      }
+      strikes.sort((a, b) => a - b)
+    } else if (typeof first === 'number') {
+      // Number array: [2400, 2420, ...]
+      strikes = d.strikes.filter((s): s is number => typeof s === 'number')
+    } else if (typeof first === 'string') {
       // String array: ["2400", "2420", ...]
       strikes = d.strikes
         .filter((s): s is string => typeof s === 'string')
         .map(s => parseInt(s, 10))
         .filter(n => !isNaN(n))
     }
-  } else if (d.strikes && typeof d.strikes === 'object') {
+  } else if (d.strikes && typeof d.strikes === 'object' && !Array.isArray(d.strikes)) {
     // Object keyed by strike: { "2400": { ce_ltp: 28 }, ... }
-    strikes = Object.keys(d.strikes as object)
+    const obj = d.strikes as Record<string, unknown>
+    strikes = Object.keys(obj)
       .map(k => parseInt(k, 10))
       .filter(n => !isNaN(n))
       .sort((a, b) => a - b)
-  } else if (Array.isArray(d.option_chain)) {
-    // Option chain array: [{ strike: 2400, ce_ltp: 28, pe_ltp: 14 }, ...]
-    strikes = (d.option_chain as Array<Record<string, unknown>>)
-      .map(row =>
-        typeof row.strike === 'number' ? row.strike : parseInt(String(row.strike), 10),
-      )
-      .filter(n => !isNaN(n))
-      .sort((a, b) => a - b)
-  } else if (d.data && typeof d.data === 'object') {
-    // Nested under 'data' key
-    const nested = d.data as Record<string, unknown>
-    if (Array.isArray(nested.strikes)) {
-      strikes = nested.strikes.filter((s): s is number => typeof s === 'number')
+    for (const [k, v] of Object.entries(obj)) {
+      const num = parseInt(k, 10)
+      if (!isNaN(num) && v && typeof v === 'object') {
+        const row = v as Record<string, unknown>
+        ltpMap[num] = {
+          ce_ltp: typeof row.ce_ltp === 'number' ? row.ce_ltp : 0,
+          pe_ltp: typeof row.pe_ltp === 'number' ? row.pe_ltp : 0,
+        }
+      }
     }
+  } else if (Array.isArray(d.option_chain)) {
+    // Option chain array: [{strike, ce_ltp, pe_ltp}, ...]
+    const rows = d.option_chain as Array<Record<string, unknown>>
+    for (const row of rows) {
+      const num = typeof row.strike === 'number' ? row.strike : parseInt(String(row.strike), 10)
+      if (!isNaN(num)) {
+        strikes.push(num)
+        ltpMap[num] = {
+          ce_ltp: typeof row.ce_ltp === 'number' ? row.ce_ltp : 0,
+          pe_ltp: typeof row.pe_ltp === 'number' ? row.pe_ltp : 0,
+        }
+      }
+    }
+    strikes.sort((a, b) => a - b)
+  } else if (d.data && typeof d.data === 'object') {
+    return parseStrikesResponse(d.data)
   }
 
   const currentPrice =
@@ -87,7 +121,7 @@ function parseStrikesResponse(raw: unknown): StrikesData {
     : typeof d.atm === 'number' ? d.atm
     : null
 
-  // Fallback: generate strikes around current price when API returned nothing useful
+  // Fallback: generate strikes around current price when API returns nothing
   if (strikes.length === 0 && currentPrice !== null) {
     const interval =
       currentPrice > 5000 ? 100
@@ -98,17 +132,20 @@ function parseStrikesResponse(raw: unknown): StrikesData {
     strikes = Array.from({ length: 13 }, (_, i) => base + (i - 6) * interval)
   }
 
+  const computedAtm = atmStrike ?? (currentPrice !== null
+    ? (() => {
+        const interval =
+          currentPrice > 5000 ? 100 : currentPrice > 1000 ? 50 : currentPrice > 500 ? 20 : 10
+        return Math.round(currentPrice / interval) * interval
+      })()
+    : null)
+
   return {
     strikes,
-    atmStrike: atmStrike ?? (currentPrice !== null
-      ? (() => {
-          const interval =
-            currentPrice > 5000 ? 100 : currentPrice > 1000 ? 50 : currentPrice > 500 ? 20 : 10
-          return Math.round(currentPrice / interval) * interval
-        })()
-      : null),
+    atmStrike: computedAtm,
     currentPrice,
     expiry: typeof d.expiry === 'string' ? d.expiry : null,
+    ltpMap,
   }
 }
 
@@ -116,9 +153,11 @@ function computeLadder(
   targetStrike: number,
   analysis: StockAnalysis,
   direction: 'CE' | 'PE',
+  ltpMap?: Record<number, StrikeLtp>,
 ): PremiumLadder {
   const { signal, current_price } = analysis
 
+  // Use signal premiums when strike + direction match exactly
   if (signal && targetStrike === signal.strike && direction === signal.direction) {
     return {
       entry: signal.entry_premium,
@@ -129,7 +168,22 @@ function computeLadder(
     }
   }
 
-  // Direction-aware OTM distance: CE = higher strikes more OTM, PE = lower strikes more OTM
+  // Use actual LTP from strikes API when available
+  const ltp = ltpMap?.[targetStrike]
+  if (ltp) {
+    const entry = direction === 'CE' ? ltp.ce_ltp : ltp.pe_ltp
+    if (entry > 0) {
+      return {
+        entry,
+        sl: parseFloat((entry * 0.5).toFixed(1)),
+        t1: parseFloat((entry * 1.5).toFixed(1)),
+        t2: parseFloat((entry * 2.0).toFixed(1)),
+        t3: parseFloat((entry * 3.0).toFixed(1)),
+      }
+    }
+  }
+
+  // Direction-aware OTM distance estimation: CE = higher strikes more OTM, PE = lower strikes more OTM
   let entry = 0
   if (signal) {
     const price = current_price ?? signal.strike
@@ -310,6 +364,7 @@ interface StrikeSelectorProps {
   selectedStrike: number | null
   onDirectionChange: (d: 'CE' | 'PE') => void
   onStrikeChange: (s: number) => void
+  onLogTrade?: (strike: number, direction: 'CE' | 'PE', ladder: PremiumLadder, expiry: string) => void
 }
 
 function StrikeSelector({
@@ -319,11 +374,14 @@ function StrikeSelector({
   selectedStrike,
   onDirectionChange,
   onStrikeChange,
+  onLogTrade,
 }: StrikeSelectorProps) {
-  const { strikes, atmStrike } = strikesData
+  const { strikes, atmStrike, ltpMap, expiry } = strikesData
   const signalStrike = analysis.signal?.strike ?? null
 
-  const ladder = selectedStrike !== null ? computeLadder(selectedStrike, analysis, direction) : null
+  const ladder = selectedStrike !== null
+    ? computeLadder(selectedStrike, analysis, direction, ltpMap)
+    : null
 
   if (strikes.length === 0) return null
 
@@ -400,6 +458,24 @@ function StrikeSelector({
       {/* Price ladder */}
       {ladder !== null && (
         <PriceLadderRow ladder={ladder} direction={direction} />
+      )}
+
+      {/* Log Trade for selected strike */}
+      {ladder !== null && selectedStrike !== null && onLogTrade && (
+        <TouchableOpacity
+          style={strikeStyles.logBtn}
+          onPress={() => onLogTrade(
+            selectedStrike,
+            direction,
+            ladder,
+            expiry ?? analysis.signal?.expiry ?? '',
+          )}
+          activeOpacity={0.8}
+        >
+          <Text style={strikeStyles.logBtnText}>
+            Log {direction} {selectedStrike} Trade
+          </Text>
+        </TouchableOpacity>
       )}
     </View>
   )
@@ -488,7 +564,7 @@ export default function SearchScreen() {
         // Parse and apply strikes
         const parsed = strikesRes.status === 'fulfilled'
           ? parseStrikesResponse(strikesRes.value)
-          : { strikes: [], atmStrike: null, currentPrice: result.current_price, expiry: null }
+          : { strikes: [], atmStrike: null, currentPrice: result.current_price, expiry: null, ltpMap: {} }
         setStrikesData(parsed)
 
         // Default selection: signal strike → ATM → first strike
@@ -514,6 +590,54 @@ export default function SearchScreen() {
       }
     }
   }, [])
+
+  const handleLogTrade = useCallback(async (signal: import('../types').Signal) => {
+    try {
+      await logTrade({
+        symbol: signal.symbol,
+        direction: signal.direction,
+        strike: signal.strike,
+        expiry: signal.expiry,
+        entry_premium: signal.entry_premium,
+        lots: 1,
+        lot_size: 1,
+        sl_premium: signal.sl_premium,
+        t1_premium: signal.t1_premium,
+        t2_premium: signal.t2_premium,
+        t3_premium: signal.t3_premium,
+      })
+      Alert.alert('Success', 'Trade logged successfully')
+    } catch {
+      Alert.alert('Error', 'Failed to log trade')
+    }
+  }, [])
+
+  const handleLogStrikeTrade = useCallback(async (
+    strike: number,
+    dir: 'CE' | 'PE',
+    ladder: PremiumLadder,
+    expiry: string,
+  ) => {
+    if (!selectedSymbol) return
+    try {
+      await logTrade({
+        symbol: selectedSymbol,
+        direction: dir,
+        strike,
+        expiry,
+        entry_premium: ladder.entry,
+        lots: 1,
+        lot_size: 1,
+        sl_premium: ladder.sl,
+        t1_premium: ladder.t1,
+        t2_premium: ladder.t2,
+        t3_premium: ladder.t3,
+      })
+      Alert.alert('Success', 'Trade logged successfully')
+    } catch {
+      Alert.alert('Error', 'Failed to log trade')
+    }
+  }, [selectedSymbol])
 
   const handleClear = useCallback(() => {
     setQuery('')
@@ -608,7 +732,7 @@ export default function SearchScreen() {
                 {analysis.qualified && analysis.signal && direction === analysis.signal.direction && (
                   <View style={styles.signalSection}>
                     <Text style={styles.sectionTitle}>Signal</Text>
-                    <SignalCard signal={analysis.signal} />
+                    <SignalCard signal={analysis.signal} onLogTrade={handleLogTrade} />
                   </View>
                 )}
 
@@ -621,6 +745,7 @@ export default function SearchScreen() {
                     selectedStrike={selectedStrike}
                     onDirectionChange={setDirection}
                     onStrikeChange={setSelectedStrike}
+                    onLogTrade={handleLogStrikeTrade}
                   />
                 )}
 
@@ -1040,6 +1165,19 @@ const strikeStyles = StyleSheet.create({
     color: colors.subtext,
     marginTop: 8,
     marginBottom: 2,
+  },
+  logBtn: {
+    marginTop: 14,
+    borderRadius: 10,
+    paddingVertical: 12,
+    alignItems: 'center',
+    backgroundColor: colors.accent,
+  },
+  logBtnText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#000',
+    letterSpacing: 0.3,
   },
 })
 
