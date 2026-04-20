@@ -1,44 +1,998 @@
-import React from 'react'
-import { View, Text, StyleSheet } from 'react-native'
+import React, { useState, useEffect, useCallback, useMemo } from 'react'
+import {
+  View,
+  Text,
+  TextInput,
+  FlatList,
+  TouchableOpacity,
+  ScrollView,
+  StyleSheet,
+  ActivityIndicator,
+} from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { colors } from '../constants'
+import { getNifty500, analyseSymbol, getStrikes } from '../services/api'
+import type { Nifty500Symbol, StockAnalysis } from '../types'
+import SignalCard from '../components/SignalCard'
+
+// ─── Types ─────────────────────────────────────────────────────────────────────
+
+interface StrikesData {
+  strikes: number[]
+  atmStrike: number | null
+  currentPrice: number | null
+  expiry: string | null
+}
+
+interface PremiumLadder {
+  entry: number
+  sl: number
+  t1: number
+  t2: number
+  t3: number
+}
+
+// ─── Helpers ───────────────────────────────────────────────────────────────────
+
+function parseStrikesResponse(raw: unknown): StrikesData {
+  if (!raw || typeof raw !== 'object') {
+    return { strikes: [], atmStrike: null, currentPrice: null, expiry: null }
+  }
+  const d = raw as Record<string, unknown>
+  const strikes = Array.isArray(d.strikes)
+    ? d.strikes.filter((s): s is number => typeof s === 'number')
+    : []
+  const currentPrice =
+    typeof d.current_price === 'number' ? d.current_price
+    : typeof d.underlying_price === 'number' ? d.underlying_price
+    : null
+  return {
+    strikes,
+    atmStrike: typeof d.atm_strike === 'number' ? d.atm_strike : null,
+    currentPrice,
+    expiry: typeof d.expiry === 'string' ? d.expiry : null,
+  }
+}
+
+function computeLadder(
+  targetStrike: number,
+  analysis: StockAnalysis,
+): PremiumLadder {
+  const { signal, current_price } = analysis
+
+  if (signal && targetStrike === signal.strike) {
+    return {
+      entry: signal.entry_premium,
+      sl: signal.sl_premium,
+      t1: signal.t1_premium,
+      t2: signal.t2_premium,
+      t3: signal.t3_premium,
+    }
+  }
+
+  // Estimate entry for a non-signal strike using OTM distance scaling
+  let entry = 0
+  if (signal) {
+    const price = current_price ?? signal.strike
+    const signalDist = Math.abs(price - signal.strike) / Math.max(price, 1)
+    const targetDist = Math.abs(price - targetStrike) / Math.max(price, 1)
+    const scale = Math.max(0.05, 1 - Math.abs(targetDist - signalDist) * 8)
+    entry = Math.max(1, parseFloat((signal.entry_premium * scale).toFixed(1)))
+  }
+
+  return {
+    entry,
+    sl: parseFloat((entry * 0.5).toFixed(1)),
+    t1: parseFloat((entry * 1.5).toFixed(1)),
+    t2: parseFloat((entry * 2.0).toFixed(1)),
+    t3: parseFloat((entry * 3.0).toFixed(1)),
+  }
+}
+
+function findAtmStrike(strikes: number[], price: number | null): number | null {
+  if (!price || strikes.length === 0) return null
+  return strikes.reduce((prev, curr) =>
+    Math.abs(curr - price) < Math.abs(prev - price) ? curr : prev
+  )
+}
+
+// ─── Confidence Bar ────────────────────────────────────────────────────────────
+
+function ConfidenceBar({ score }: { score: number }) {
+  const pct = Math.min(100, Math.max(0, score))
+  const barColor =
+    pct >= 80 ? colors.bull : pct >= 60 ? colors.warn : colors.bear
+  return (
+    <View style={confStyles.wrapper}>
+      <View style={confStyles.row}>
+        <Text style={confStyles.label}>Confidence</Text>
+        <Text style={[confStyles.score, { color: barColor }]}>{pct}%</Text>
+      </View>
+      <View style={confStyles.track}>
+        <View style={[confStyles.fill, { width: `${pct}%`, backgroundColor: barColor }]} />
+      </View>
+    </View>
+  )
+}
+
+// ─── Metric Pill ───────────────────────────────────────────────────────────────
+
+function MetricPill({
+  label,
+  value,
+  valueColor,
+}: {
+  label: string
+  value: string
+  valueColor?: string
+}) {
+  return (
+    <View style={metricStyles.pill}>
+      <Text style={metricStyles.label}>{label}</Text>
+      <Text style={[metricStyles.value, valueColor ? { color: valueColor } : null]}>
+        {value}
+      </Text>
+    </View>
+  )
+}
+
+// ─── Analysis Card ─────────────────────────────────────────────────────────────
+
+function AnalysisCard({ analysis }: { analysis: StockAnalysis }) {
+  const qualified = analysis.qualified
+  const badgeColor = qualified ? colors.bull : colors.bear
+  const badgeBg = qualified ? 'rgba(34,197,94,0.12)' : 'rgba(239,68,68,0.12)'
+
+  const rsiColor =
+    analysis.rsi !== null
+      ? analysis.rsi >= 70 ? colors.bear
+        : analysis.rsi <= 30 ? colors.bull
+        : colors.text
+      : colors.muted
+
+  return (
+    <View style={analysisStyles.card}>
+      {/* Symbol + qualified badge */}
+      <View style={analysisStyles.header}>
+        <View>
+          <Text style={analysisStyles.symbol}>{analysis.symbol}</Text>
+          {analysis.current_price !== null && (
+            <Text style={analysisStyles.price}>
+              ₹{analysis.current_price.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+            </Text>
+          )}
+        </View>
+        <View style={[analysisStyles.badge, { backgroundColor: badgeBg }]}>
+          <Text style={[analysisStyles.badgeText, { color: badgeColor }]}>
+            {qualified ? '✓ Qualifies' : '✗ Does not qualify'}
+          </Text>
+        </View>
+      </View>
+
+      {/* Metrics row */}
+      <View style={analysisStyles.metrics}>
+        {analysis.rsi !== null && (
+          <MetricPill
+            label="RSI"
+            value={analysis.rsi.toFixed(1)}
+            valueColor={rsiColor}
+          />
+        )}
+        {analysis.ema20 !== null && (
+          <MetricPill
+            label="EMA20"
+            value={`₹${analysis.ema20.toFixed(1)}`}
+            valueColor={analysis.above_ema ? colors.bull : colors.bear}
+          />
+        )}
+        {analysis.volume_ratio !== null && (
+          <MetricPill
+            label="Vol Ratio"
+            value={`${analysis.volume_ratio.toFixed(2)}×`}
+            valueColor={analysis.volume_ratio >= 1.5 ? colors.bull : colors.subtext}
+          />
+        )}
+        {analysis.above_ema && (
+          <MetricPill label="EMA" value="Above" valueColor={colors.bull} />
+        )}
+      </View>
+
+      {/* Confidence bar */}
+      <ConfidenceBar score={analysis.confidence_score} />
+
+      {/* Reason */}
+      {analysis.reason.length > 0 && (
+        <Text style={analysisStyles.reason}>{analysis.reason}</Text>
+      )}
+    </View>
+  )
+}
+
+// ─── Price Ladder ──────────────────────────────────────────────────────────────
+
+function PriceLadderRow({ ladder, direction }: { ladder: PremiumLadder; direction: 'CE' | 'PE' }) {
+  const levels = [
+    { label: 'SL', value: ladder.sl, color: colors.bear },
+    { label: 'Entry', value: ladder.entry, color: colors.text },
+    { label: 'T1', value: ladder.t1, color: colors.accent },
+    { label: 'T2', value: ladder.t2, color: colors.accent },
+    { label: 'T3', value: ladder.t3, color: colors.bull },
+  ]
+
+  return (
+    <View style={ladderStyles.container}>
+      <Text style={ladderStyles.header}>{direction} Premium Ladder</Text>
+      <View style={ladderStyles.row}>
+        {levels.map((lvl, idx) => (
+          <React.Fragment key={lvl.label}>
+            {idx > 0 && <Text style={ladderStyles.arrow}>›</Text>}
+            <View style={ladderStyles.cell}>
+              <Text style={[ladderStyles.cellLabel, { color: lvl.color }]}>{lvl.label}</Text>
+              <Text style={[ladderStyles.cellValue, { color: lvl.color }]}>
+                {lvl.value > 0 ? `₹${lvl.value}` : '—'}
+              </Text>
+            </View>
+          </React.Fragment>
+        ))}
+      </View>
+    </View>
+  )
+}
+
+// ─── Strike Selector ──────────────────────────────────────────────────────────
+
+interface StrikeSelectorProps {
+  strikesData: StrikesData
+  analysis: StockAnalysis
+  direction: 'CE' | 'PE'
+  selectedStrike: number | null
+  onDirectionChange: (d: 'CE' | 'PE') => void
+  onStrikeChange: (s: number) => void
+}
+
+function StrikeSelector({
+  strikesData,
+  analysis,
+  direction,
+  selectedStrike,
+  onDirectionChange,
+  onStrikeChange,
+}: StrikeSelectorProps) {
+  const { strikes, atmStrike } = strikesData
+  const signalStrike = analysis.signal?.strike ?? null
+
+  const ladder = selectedStrike !== null ? computeLadder(selectedStrike, analysis) : null
+
+  if (strikes.length === 0) return null
+
+  return (
+    <View style={strikeStyles.container}>
+      <Text style={strikeStyles.sectionTitle}>Strike Selector</Text>
+
+      {/* CE / PE toggle */}
+      <View style={strikeStyles.toggle}>
+        <TouchableOpacity
+          style={[strikeStyles.toggleBtn, direction === 'CE' && strikeStyles.activeCE]}
+          onPress={() => onDirectionChange('CE')}
+          activeOpacity={0.8}
+        >
+          <Text style={[strikeStyles.toggleText, direction === 'CE' && strikeStyles.textCE]}>
+            CE — Call
+          </Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[strikeStyles.toggleBtn, direction === 'PE' && strikeStyles.activePE]}
+          onPress={() => onDirectionChange('PE')}
+          activeOpacity={0.8}
+        >
+          <Text style={[strikeStyles.toggleText, direction === 'PE' && strikeStyles.textPE]}>
+            PE — Put
+          </Text>
+        </TouchableOpacity>
+      </View>
+
+      {/* Strike chips */}
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={strikeStyles.chipsContent}
+        style={strikeStyles.chipsScroll}
+      >
+        {strikes.map(strike => {
+          const isSelected = selectedStrike === strike
+          const isAtm = atmStrike === strike
+          const isSignal = signalStrike === strike
+          const chipColor = direction === 'CE' ? colors.bull : colors.bear
+
+          return (
+            <TouchableOpacity
+              key={strike}
+              style={[
+                strikeStyles.chip,
+                isSelected && { backgroundColor: chipColor + '22', borderColor: chipColor },
+              ]}
+              onPress={() => onStrikeChange(strike)}
+              activeOpacity={0.8}
+            >
+              {(isAtm || isSignal) && (
+                <Text style={[strikeStyles.chipTag, { color: isAtm ? colors.warn : colors.accent }]}>
+                  {isAtm ? 'ATM' : 'SIG'}
+                </Text>
+              )}
+              <Text style={[strikeStyles.chipText, isSelected && { color: chipColor, fontWeight: '700' }]}>
+                {strike}
+              </Text>
+            </TouchableOpacity>
+          )
+        })}
+      </ScrollView>
+
+      {/* Selected strike label */}
+      {selectedStrike !== null && (
+        <Text style={strikeStyles.selectedLabel}>
+          Strike {selectedStrike} {direction}
+          {selectedStrike === signalStrike ? ' · Signal pick' : selectedStrike === atmStrike ? ' · ATM' : ''}
+        </Text>
+      )}
+
+      {/* Price ladder */}
+      {ladder !== null && (
+        <PriceLadderRow ladder={ladder} direction={direction} />
+      )}
+    </View>
+  )
+}
+
+// ─── Empty State ───────────────────────────────────────────────────────────────
+
+function EmptyState() {
+  return (
+    <View style={emptyStyles.container}>
+      <Text style={emptyStyles.icon}>⊕</Text>
+      <Text style={emptyStyles.title}>Search any Nifty 500 stock</Text>
+      <Text style={emptyStyles.sub}>
+        Get RSI, EMA20, volume analysis and options signals
+      </Text>
+    </View>
+  )
+}
+
+// ─── Main Screen ───────────────────────────────────────────────────────────────
 
 export default function SearchScreen() {
+  const [symbols, setSymbols] = useState<Nifty500Symbol[]>([])
+  const [symbolsLoading, setSymbolsLoading] = useState(true)
+  const [query, setQuery] = useState('')
+  const [inputFocused, setInputFocused] = useState(false)
+
+  const [selectedSymbol, setSelectedSymbol] = useState<string | null>(null)
+  const [analysis, setAnalysis] = useState<StockAnalysis | null>(null)
+  const [analysing, setAnalysing] = useState(false)
+
+  const [strikesData, setStrikesData] = useState<StrikesData | null>(null)
+  const [strikesLoading, setStrikesLoading] = useState(false)
+
+  const [direction, setDirection] = useState<'CE' | 'PE'>('CE')
+  const [selectedStrike, setSelectedStrike] = useState<number | null>(null)
+
+  // Load Nifty500 symbol list once
+  useEffect(() => {
+    getNifty500()
+      .then(res => setSymbols(res.symbols))
+      .catch(() => null)
+      .finally(() => setSymbolsLoading(false))
+  }, [])
+
+  // Filter symbols as user types — limit to 20 results
+  const filteredSymbols = useMemo(() => {
+    if (!query) return []
+    const q = query.toUpperCase().trim()
+    return symbols
+      .filter(s => s.symbol.startsWith(q) || s.symbol.includes(q) || s.label.toUpperCase().includes(q))
+      .sort((a, b) => (a.symbol.startsWith(q) ? -1 : 1) - (b.symbol.startsWith(q) ? -1 : 1))
+      .slice(0, 20)
+  }, [symbols, query])
+
+  const showDropdown = inputFocused && query.length >= 1 && filteredSymbols.length > 0
+
+  const handleSelectSymbol = useCallback(async (symbol: string, label: string) => {
+    setQuery(label)
+    setInputFocused(false)
+    setSelectedSymbol(symbol)
+    setAnalysis(null)
+    setStrikesData(null)
+    setSelectedStrike(null)
+    setDirection('CE')
+    setAnalysing(true)
+    setStrikesLoading(true)
+
+    const [analysisRes, strikesRes] = await Promise.allSettled([
+      analyseSymbol(symbol),
+      getStrikes(symbol),
+    ])
+
+    if (analysisRes.status === 'fulfilled') {
+      const result = analysisRes.value
+      setAnalysis(result)
+
+      // Parse and apply strikes
+      const parsed = strikesRes.status === 'fulfilled'
+        ? parseStrikesResponse(strikesRes.value)
+        : { strikes: [], atmStrike: null, currentPrice: result.current_price, expiry: null }
+      setStrikesData(parsed)
+
+      // Default selection: signal strike → ATM → first strike
+      const defaultStrike =
+        result.signal?.strike
+        ?? parsed.atmStrike
+        ?? findAtmStrike(parsed.strikes, result.current_price)
+        ?? parsed.strikes[0]
+        ?? null
+      setSelectedStrike(defaultStrike)
+    } else {
+      // Analysis failed — try to still set strikes
+      if (strikesRes.status === 'fulfilled') {
+        const parsed = parseStrikesResponse(strikesRes.value)
+        setStrikesData(parsed)
+        setSelectedStrike(parsed.atmStrike ?? parsed.strikes[0] ?? null)
+      }
+    }
+
+    setAnalysing(false)
+    setStrikesLoading(false)
+  }, [])
+
+  const handleClear = useCallback(() => {
+    setQuery('')
+    setSelectedSymbol(null)
+    setAnalysis(null)
+    setStrikesData(null)
+    setSelectedStrike(null)
+    setInputFocused(false)
+  }, [])
+
+  const showStrikeSelector =
+    !analysing
+    && analysis !== null
+    && strikesData !== null
+    && !strikesLoading
+    && strikesData.strikes.length > 0
+
   return (
     <SafeAreaView style={styles.safe}>
-      <View style={styles.container}>
+      {/* Header */}
+      <View style={styles.topBar}>
         <Text style={styles.title}>Search</Text>
-        <Text style={styles.sub}>Nifty 500 Stock Analysis</Text>
-        <View style={styles.card}>
-          <Text style={styles.label}>Phase 4</Text>
-          <Text style={styles.value}>Stock search + analysis coming soon</Text>
-          <Text style={styles.note}>Search any Nifty 500 stock — get RSI, EMA, signal</Text>
+        <Text style={styles.titleSub}>Nifty 500</Text>
+      </View>
+
+      <View style={styles.body}>
+        {/* Search input */}
+        <View style={styles.searchRow}>
+          <View style={[styles.inputWrap, inputFocused && styles.inputWrapFocused]}>
+            <Text style={styles.searchIcon}>⊕</Text>
+            <TextInput
+              style={styles.input}
+              value={query}
+              onChangeText={setQuery}
+              onFocus={() => setInputFocused(true)}
+              onBlur={() => {
+                // Delay so tap on dropdown registers first
+                setTimeout(() => setInputFocused(false), 150)
+              }}
+              placeholder={symbolsLoading ? 'Loading symbols…' : 'Symbol or company name…'}
+              placeholderTextColor={colors.muted}
+              autoCapitalize="characters"
+              autoCorrect={false}
+              returnKeyType="search"
+            />
+            {query.length > 0 && (
+              <TouchableOpacity onPress={handleClear} style={styles.clearBtn} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                <Text style={styles.clearText}>✕</Text>
+              </TouchableOpacity>
+            )}
+          </View>
         </View>
+
+        {/* Dropdown — replaces content area when visible */}
+        {showDropdown ? (
+          <FlatList
+            data={filteredSymbols}
+            keyExtractor={item => item.symbol}
+            renderItem={({ item }) => (
+              <TouchableOpacity
+                style={styles.dropdownItem}
+                onPress={() => handleSelectSymbol(item.symbol, item.symbol)}
+                activeOpacity={0.75}
+              >
+                <Text style={styles.dropdownSymbol}>{item.symbol}</Text>
+                <Text style={styles.dropdownLabel} numberOfLines={1}>{item.label}</Text>
+              </TouchableOpacity>
+            )}
+            ItemSeparatorComponent={() => <View style={styles.dropdownSep} />}
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
+            style={styles.dropdown}
+          />
+        ) : selectedSymbol ? (
+          /* Analysis content */
+          <ScrollView
+            style={styles.results}
+            contentContainerStyle={styles.resultsContent}
+            showsVerticalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+          >
+            {analysing ? (
+              <View style={styles.analysingCenter}>
+                <ActivityIndicator size="large" color={colors.accent} />
+                <Text style={styles.analysingText}>Analysing {selectedSymbol}…</Text>
+              </View>
+            ) : analysis ? (
+              <>
+                <AnalysisCard analysis={analysis} />
+
+                {/* Full SignalCard if qualified */}
+                {analysis.qualified && analysis.signal && (
+                  <View style={styles.signalSection}>
+                    <Text style={styles.sectionTitle}>Signal</Text>
+                    <SignalCard signal={analysis.signal} />
+                  </View>
+                )}
+
+                {/* Strike selector */}
+                {showStrikeSelector && strikesData && (
+                  <StrikeSelector
+                    strikesData={strikesData}
+                    analysis={analysis}
+                    direction={direction}
+                    selectedStrike={selectedStrike}
+                    onDirectionChange={setDirection}
+                    onStrikeChange={setSelectedStrike}
+                  />
+                )}
+
+                {strikesLoading && (
+                  <View style={styles.strikesLoading}>
+                    <ActivityIndicator size="small" color={colors.muted} />
+                    <Text style={styles.strikesLoadingText}>Loading strikes…</Text>
+                  </View>
+                )}
+              </>
+            ) : (
+              <View style={styles.errorBox}>
+                <Text style={styles.errorText}>Could not analyse {selectedSymbol}.</Text>
+                <Text style={styles.errorSub}>Check your connection and try again.</Text>
+              </View>
+            )}
+
+            <View style={styles.bottomPad} />
+          </ScrollView>
+        ) : (
+          <EmptyState />
+        )}
       </View>
     </SafeAreaView>
   )
 }
 
+// ─── Styles ────────────────────────────────────────────────────────────────────
+
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: colors.bg },
-  container: { flex: 1, padding: 16 },
-  title: { fontSize: 22, fontWeight: '600', color: colors.text, marginBottom: 4 },
-  sub: { fontSize: 12, color: colors.subtext, marginBottom: 20 },
-  card: {
+  safe: {
+    flex: 1,
+    backgroundColor: colors.bg,
+  },
+  topBar: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    gap: 8,
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    paddingBottom: 10,
+    borderBottomWidth: 0.5,
+    borderBottomColor: colors.border,
+  },
+  title: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: colors.text,
+    letterSpacing: 0.2,
+  },
+  titleSub: {
+    fontSize: 12,
+    color: colors.muted,
+  },
+  body: {
+    flex: 1,
+    paddingHorizontal: 16,
+    paddingTop: 14,
+  },
+  searchRow: {
+    marginBottom: 12,
+  },
+  inputWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
     backgroundColor: colors.card,
     borderRadius: 12,
-    padding: 14,
-    marginBottom: 12,
-    borderLeftWidth: 3,
-    borderLeftColor: colors.accent,
+    borderWidth: 0.5,
+    borderColor: colors.border,
+    paddingHorizontal: 12,
+    gap: 8,
+  },
+  inputWrapFocused: {
+    borderColor: colors.accent,
+    borderWidth: 1,
+  },
+  searchIcon: {
+    fontSize: 16,
+    color: colors.muted,
+  },
+  input: {
+    flex: 1,
+    height: 46,
+    fontSize: 14,
+    color: colors.text,
+    letterSpacing: 0.3,
+  },
+  clearBtn: {
+    paddingLeft: 4,
+  },
+  clearText: {
+    fontSize: 13,
+    color: colors.muted,
+  },
+  dropdown: {
+    flex: 1,
+    backgroundColor: colors.surface,
+    borderRadius: 12,
+    borderWidth: 0.5,
+    borderColor: colors.border,
+  },
+  dropdownItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 14,
+    paddingVertical: 13,
+    gap: 12,
+  },
+  dropdownSymbol: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: colors.accent,
+    width: 80,
+  },
+  dropdownLabel: {
+    fontSize: 12,
+    color: colors.subtext,
+    flex: 1,
+  },
+  dropdownSep: {
+    height: 0.5,
+    backgroundColor: colors.border,
+    marginHorizontal: 14,
+  },
+  results: {
+    flex: 1,
+  },
+  resultsContent: {
+    paddingBottom: 24,
+  },
+  analysingCenter: {
+    alignItems: 'center',
+    paddingVertical: 60,
+    gap: 12,
+  },
+  analysingText: {
+    fontSize: 13,
+    color: colors.subtext,
+  },
+  signalSection: {
+    marginBottom: 4,
+  },
+  sectionTitle: {
+    fontSize: 11,
+    color: colors.muted,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+    marginBottom: 8,
+    marginTop: 4,
+  },
+  strikesLoading: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: 12,
+  },
+  strikesLoadingText: {
+    fontSize: 12,
+    color: colors.muted,
+  },
+  errorBox: {
+    backgroundColor: colors.card,
+    borderRadius: 12,
+    padding: 20,
+    alignItems: 'center',
+    borderWidth: 0.5,
+    borderColor: colors.border,
+  },
+  errorText: {
+    fontSize: 14,
+    color: colors.subtext,
+    fontWeight: '600',
+    marginBottom: 4,
+  },
+  errorSub: {
+    fontSize: 12,
+    color: colors.muted,
+  },
+  bottomPad: {
+    height: 32,
+  },
+})
+
+const confStyles = StyleSheet.create({
+  wrapper: {
+    marginTop: 12,
+    marginBottom: 2,
+  },
+  row: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 6,
   },
   label: {
-    fontSize: 11,
-    color: colors.subtext,
-    marginBottom: 4,
+    fontSize: 10,
+    color: colors.muted,
     textTransform: 'uppercase',
     letterSpacing: 0.5,
   },
-  value: { fontSize: 14, color: colors.text, fontWeight: '500' },
-  note: { fontSize: 12, color: colors.subtext, marginTop: 4 },
+  score: {
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  track: {
+    height: 6,
+    backgroundColor: colors.border,
+    borderRadius: 3,
+    overflow: 'hidden',
+  },
+  fill: {
+    height: 6,
+    borderRadius: 3,
+  },
+})
+
+const metricStyles = StyleSheet.create({
+  pill: {
+    backgroundColor: colors.surface,
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    alignItems: 'center',
+    borderWidth: 0.5,
+    borderColor: colors.border,
+    minWidth: 64,
+  },
+  label: {
+    fontSize: 9,
+    color: colors.muted,
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+    marginBottom: 3,
+  },
+  value: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: colors.text,
+  },
+})
+
+const analysisStyles = StyleSheet.create({
+  card: {
+    backgroundColor: colors.card,
+    borderRadius: 14,
+    padding: 16,
+    marginBottom: 14,
+    borderWidth: 0.5,
+    borderColor: colors.border,
+  },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    marginBottom: 14,
+  },
+  symbol: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: colors.text,
+    letterSpacing: 0.3,
+  },
+  price: {
+    fontSize: 14,
+    color: colors.subtext,
+    marginTop: 2,
+  },
+  badge: {
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 20,
+  },
+  badgeText: {
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 0.3,
+  },
+  metrics: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: 4,
+  },
+  reason: {
+    marginTop: 12,
+    fontSize: 12,
+    color: colors.subtext,
+    lineHeight: 17,
+    fontStyle: 'italic',
+  },
+})
+
+const ladderStyles = StyleSheet.create({
+  container: {
+    backgroundColor: colors.surface,
+    borderRadius: 10,
+    padding: 12,
+    marginTop: 14,
+    borderWidth: 0.5,
+    borderColor: colors.border,
+  },
+  header: {
+    fontSize: 9,
+    color: colors.muted,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    marginBottom: 10,
+  },
+  row: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  arrow: {
+    fontSize: 12,
+    color: colors.border,
+  },
+  cell: {
+    alignItems: 'center',
+    flex: 1,
+  },
+  cellLabel: {
+    fontSize: 9,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+    marginBottom: 3,
+  },
+  cellValue: {
+    fontSize: 11,
+    fontWeight: '600',
+  },
+})
+
+const strikeStyles = StyleSheet.create({
+  container: {
+    backgroundColor: colors.card,
+    borderRadius: 14,
+    padding: 16,
+    marginBottom: 14,
+    borderWidth: 0.5,
+    borderColor: colors.border,
+  },
+  sectionTitle: {
+    fontSize: 11,
+    color: colors.muted,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+    marginBottom: 12,
+  },
+  toggle: {
+    flexDirection: 'row',
+    gap: 10,
+    marginBottom: 14,
+  },
+  toggleBtn: {
+    flex: 1,
+    paddingVertical: 10,
+    borderRadius: 10,
+    alignItems: 'center',
+    backgroundColor: colors.surface,
+    borderWidth: 0.5,
+    borderColor: colors.border,
+  },
+  activeCE: {
+    backgroundColor: 'rgba(34,197,94,0.12)',
+    borderColor: colors.bull,
+  },
+  activePE: {
+    backgroundColor: 'rgba(239,68,68,0.12)',
+    borderColor: colors.bear,
+  },
+  toggleText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: colors.muted,
+    letterSpacing: 0.3,
+  },
+  textCE: {
+    color: colors.bull,
+  },
+  textPE: {
+    color: colors.bear,
+  },
+  chipsScroll: {
+    marginBottom: 4,
+  },
+  chipsContent: {
+    gap: 8,
+    paddingRight: 4,
+    paddingBottom: 4,
+  },
+  chip: {
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+    borderRadius: 10,
+    backgroundColor: colors.surface,
+    borderWidth: 0.5,
+    borderColor: colors.border,
+    alignItems: 'center',
+    minWidth: 68,
+  },
+  chipTag: {
+    fontSize: 8,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+    marginBottom: 2,
+  },
+  chipText: {
+    fontSize: 12,
+    color: colors.text,
+    fontWeight: '600',
+  },
+  selectedLabel: {
+    fontSize: 11,
+    color: colors.subtext,
+    marginTop: 8,
+    marginBottom: 2,
+  },
+})
+
+const emptyStyles = StyleSheet.create({
+  container: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingBottom: 60,
+    gap: 10,
+  },
+  icon: {
+    fontSize: 40,
+    color: colors.border,
+    marginBottom: 4,
+  },
+  title: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: colors.subtext,
+  },
+  sub: {
+    fontSize: 13,
+    color: colors.muted,
+    textAlign: 'center',
+    lineHeight: 19,
+    paddingHorizontal: 32,
+  },
 })
