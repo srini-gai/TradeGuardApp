@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react'
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import {
   View,
   Text,
@@ -39,16 +39,74 @@ function parseStrikesResponse(raw: unknown): StrikesData {
     return { strikes: [], atmStrike: null, currentPrice: null, expiry: null }
   }
   const d = raw as Record<string, unknown>
-  const strikes = Array.isArray(d.strikes)
-    ? d.strikes.filter((s): s is number => typeof s === 'number')
-    : []
+
+  let strikes: number[] = []
+
+  if (Array.isArray(d.strikes)) {
+    // Number array: [2400, 2420, ...]
+    const asNums = d.strikes.filter((s): s is number => typeof s === 'number')
+    if (asNums.length > 0) {
+      strikes = asNums
+    } else {
+      // String array: ["2400", "2420", ...]
+      strikes = d.strikes
+        .filter((s): s is string => typeof s === 'string')
+        .map(s => parseInt(s, 10))
+        .filter(n => !isNaN(n))
+    }
+  } else if (d.strikes && typeof d.strikes === 'object') {
+    // Object keyed by strike: { "2400": { ce_ltp: 28 }, ... }
+    strikes = Object.keys(d.strikes as object)
+      .map(k => parseInt(k, 10))
+      .filter(n => !isNaN(n))
+      .sort((a, b) => a - b)
+  } else if (Array.isArray(d.option_chain)) {
+    // Option chain array: [{ strike: 2400, ce_ltp: 28, pe_ltp: 14 }, ...]
+    strikes = (d.option_chain as Array<Record<string, unknown>>)
+      .map(row =>
+        typeof row.strike === 'number' ? row.strike : parseInt(String(row.strike), 10),
+      )
+      .filter(n => !isNaN(n))
+      .sort((a, b) => a - b)
+  } else if (d.data && typeof d.data === 'object') {
+    // Nested under 'data' key
+    const nested = d.data as Record<string, unknown>
+    if (Array.isArray(nested.strikes)) {
+      strikes = nested.strikes.filter((s): s is number => typeof s === 'number')
+    }
+  }
+
   const currentPrice =
     typeof d.current_price === 'number' ? d.current_price
     : typeof d.underlying_price === 'number' ? d.underlying_price
+    : typeof d.ltp === 'number' ? d.ltp
     : null
+
+  const atmStrike =
+    typeof d.atm_strike === 'number' ? d.atm_strike
+    : typeof d.atm === 'number' ? d.atm
+    : null
+
+  // Fallback: generate strikes around current price when API returned nothing useful
+  if (strikes.length === 0 && currentPrice !== null) {
+    const interval =
+      currentPrice > 5000 ? 100
+      : currentPrice > 1000 ? 50
+      : currentPrice > 500 ? 20
+      : 10
+    const base = Math.round(currentPrice / interval) * interval
+    strikes = Array.from({ length: 13 }, (_, i) => base + (i - 6) * interval)
+  }
+
   return {
     strikes,
-    atmStrike: typeof d.atm_strike === 'number' ? d.atm_strike : null,
+    atmStrike: atmStrike ?? (currentPrice !== null
+      ? (() => {
+          const interval =
+            currentPrice > 5000 ? 100 : currentPrice > 1000 ? 50 : currentPrice > 500 ? 20 : 10
+          return Math.round(currentPrice / interval) * interval
+        })()
+      : null),
     currentPrice,
     expiry: typeof d.expiry === 'string' ? d.expiry : null,
   }
@@ -57,10 +115,11 @@ function parseStrikesResponse(raw: unknown): StrikesData {
 function computeLadder(
   targetStrike: number,
   analysis: StockAnalysis,
+  direction: 'CE' | 'PE',
 ): PremiumLadder {
   const { signal, current_price } = analysis
 
-  if (signal && targetStrike === signal.strike) {
+  if (signal && targetStrike === signal.strike && direction === signal.direction) {
     return {
       entry: signal.entry_premium,
       sl: signal.sl_premium,
@@ -70,13 +129,16 @@ function computeLadder(
     }
   }
 
-  // Estimate entry for a non-signal strike using OTM distance scaling
+  // Direction-aware OTM distance: CE = higher strikes more OTM, PE = lower strikes more OTM
   let entry = 0
   if (signal) {
     const price = current_price ?? signal.strike
-    const signalDist = Math.abs(price - signal.strike) / Math.max(price, 1)
-    const targetDist = Math.abs(price - targetStrike) / Math.max(price, 1)
-    const scale = Math.max(0.05, 1 - Math.abs(targetDist - signalDist) * 8)
+    const otmDist = (strike: number) =>
+      direction === 'CE'
+        ? (strike - price) / Math.max(price, 1)
+        : (price - strike) / Math.max(price, 1)
+    const otmDiff = otmDist(targetStrike) - otmDist(signal.strike)
+    const scale = Math.max(0.05, 1 - otmDiff * 8)
     entry = Math.max(1, parseFloat((signal.entry_premium * scale).toFixed(1)))
   }
 
@@ -261,7 +323,7 @@ function StrikeSelector({
   const { strikes, atmStrike } = strikesData
   const signalStrike = analysis.signal?.strike ?? null
 
-  const ladder = selectedStrike !== null ? computeLadder(selectedStrike, analysis) : null
+  const ladder = selectedStrike !== null ? computeLadder(selectedStrike, analysis, direction) : null
 
   if (strikes.length === 0) return null
 
@@ -375,6 +437,8 @@ export default function SearchScreen() {
   const [direction, setDirection] = useState<'CE' | 'PE'>('CE')
   const [selectedStrike, setSelectedStrike] = useState<number | null>(null)
 
+  const searchIdRef = useRef(0)
+
   // Load Nifty500 symbol list once
   useEffect(() => {
     getNifty500()
@@ -396,6 +460,8 @@ export default function SearchScreen() {
   const showDropdown = inputFocused && query.length >= 1 && filteredSymbols.length > 0
 
   const handleSelectSymbol = useCallback(async (symbol: string, label: string) => {
+    const myId = ++searchIdRef.current
+
     setQuery(label)
     setInputFocused(false)
     setSelectedSymbol(symbol)
@@ -406,40 +472,47 @@ export default function SearchScreen() {
     setAnalysing(true)
     setStrikesLoading(true)
 
-    const [analysisRes, strikesRes] = await Promise.allSettled([
-      analyseSymbol(symbol),
-      getStrikes(symbol),
-    ])
+    try {
+      const [analysisRes, strikesRes] = await Promise.allSettled([
+        analyseSymbol(symbol),
+        getStrikes(symbol),
+      ])
 
-    if (analysisRes.status === 'fulfilled') {
-      const result = analysisRes.value
-      setAnalysis(result)
+      if (myId !== searchIdRef.current) return  // superseded by a newer search
 
-      // Parse and apply strikes
-      const parsed = strikesRes.status === 'fulfilled'
-        ? parseStrikesResponse(strikesRes.value)
-        : { strikes: [], atmStrike: null, currentPrice: result.current_price, expiry: null }
-      setStrikesData(parsed)
+      if (analysisRes.status === 'fulfilled') {
+        const result = analysisRes.value
+        setAnalysis(result)
+        setDirection(result.signal?.direction ?? 'CE')
 
-      // Default selection: signal strike → ATM → first strike
-      const defaultStrike =
-        result.signal?.strike
-        ?? parsed.atmStrike
-        ?? findAtmStrike(parsed.strikes, result.current_price)
-        ?? parsed.strikes[0]
-        ?? null
-      setSelectedStrike(defaultStrike)
-    } else {
-      // Analysis failed — try to still set strikes
-      if (strikesRes.status === 'fulfilled') {
-        const parsed = parseStrikesResponse(strikesRes.value)
+        // Parse and apply strikes
+        const parsed = strikesRes.status === 'fulfilled'
+          ? parseStrikesResponse(strikesRes.value)
+          : { strikes: [], atmStrike: null, currentPrice: result.current_price, expiry: null }
         setStrikesData(parsed)
-        setSelectedStrike(parsed.atmStrike ?? parsed.strikes[0] ?? null)
+
+        // Default selection: signal strike → ATM → first strike
+        const defaultStrike =
+          result.signal?.strike
+          ?? parsed.atmStrike
+          ?? findAtmStrike(parsed.strikes, result.current_price)
+          ?? parsed.strikes[0]
+          ?? null
+        setSelectedStrike(defaultStrike)
+      } else {
+        // Analysis failed — try to still set strikes
+        if (strikesRes.status === 'fulfilled') {
+          const parsed = parseStrikesResponse(strikesRes.value)
+          setStrikesData(parsed)
+          setSelectedStrike(parsed.atmStrike ?? parsed.strikes[0] ?? null)
+        }
+      }
+    } finally {
+      if (myId === searchIdRef.current) {
+        setAnalysing(false)
+        setStrikesLoading(false)
       }
     }
-
-    setAnalysing(false)
-    setStrikesLoading(false)
   }, [])
 
   const handleClear = useCallback(() => {
@@ -531,8 +604,8 @@ export default function SearchScreen() {
               <>
                 <AnalysisCard analysis={analysis} />
 
-                {/* Full SignalCard if qualified */}
-                {analysis.qualified && analysis.signal && (
+                {/* Full SignalCard if qualified and direction matches signal */}
+                {analysis.qualified && analysis.signal && direction === analysis.signal.direction && (
                   <View style={styles.signalSection}>
                     <Text style={styles.sectionTitle}>Signal</Text>
                     <SignalCard signal={analysis.signal} />
