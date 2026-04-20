@@ -16,6 +16,7 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import Constants from 'expo-constants'
 import { colors, WEBHOOK_BASE } from '../constants'
+import NotificationSettingsScreen from './NotificationSettingsScreen'
 import {
   getBacktestSummary,
   runBacktest,
@@ -588,7 +589,7 @@ function SettingsRow({
   )
 }
 
-function SettingsTab() {
+function SettingsTab({ onOpenNotifSettings }: { onOpenNotifSettings: () => void }) {
   const [healthOk, setHealthOk] = useState<boolean | null>(null)
   const [clearingCache, setClearingCache] = useState(false)
 
@@ -688,6 +689,15 @@ function SettingsTab() {
         <SettingsRow label="Version" value={`v${APP_VERSION}`} />
         <View style={settingsStyles.rowDivider} />
         <SettingsRow label="Backend" value="tradegard.tech" />
+        <View style={settingsStyles.rowDivider} />
+        <TouchableOpacity
+          style={settingsStyles.row}
+          onPress={onOpenNotifSettings}
+          activeOpacity={0.7}
+        >
+          <Text style={settingsStyles.rowLabel}>Notification Settings</Text>
+          <Text style={settingsStyles.chevron}>›</Text>
+        </TouchableOpacity>
       </View>
 
       <TouchableOpacity
@@ -717,9 +727,19 @@ const TABS: Array<{ id: TabId; label: string }> = [
 
 export default function MoreScreen() {
   const [activeTab, setActiveTab] = useState<TabId>('backtest')
+  const [showNotifSettings, setShowNotifSettings] = useState(false)
 
   return (
     <SafeAreaView style={styles.safe}>
+      {/* Notification Settings full-screen modal */}
+      <Modal
+        visible={showNotifSettings}
+        animationType="slide"
+        onRequestClose={() => setShowNotifSettings(false)}
+      >
+        <NotificationSettingsScreen onBack={() => setShowNotifSettings(false)} />
+      </Modal>
+
       <View style={styles.topBar}>
         <Text style={styles.title}>More</Text>
         <Text style={styles.titleSub}>Tools & Settings</Text>
@@ -743,7 +763,9 @@ export default function MoreScreen() {
       <View style={styles.content}>
         {activeTab === 'backtest' && <BacktestTab />}
         {activeTab === 'alerts' && <AlertsTab />}
-        {activeTab === 'settings' && <SettingsTab />}
+        {activeTab === 'settings' && (
+          <SettingsTab onOpenNotifSettings={() => setShowNotifSettings(true)} />
+        )}
       </View>
     </SafeAreaView>
   )
@@ -1274,6 +1296,10 @@ const settingsStyles = StyleSheet.create({
     width: 8,
     height: 8,
     borderRadius: 4,
+  },
+  chevron: {
+    fontSize: 18,
+    color: colors.muted,
   },
   clearBtn: {
     marginTop: 24,

@@ -22,7 +22,10 @@
       "permissions": ["NOTIFICATIONS", "RECEIVE_BOOT_COMPLETED"]
     },
     "plugins": [
-      "expo-notifications",
+      ["expo-notifications", {
+        "icon": "./assets/icon.png",
+        "color": "#00d4aa"
+      }],
       "expo-font"
     ]
   }

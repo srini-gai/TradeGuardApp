@@ -27,6 +27,7 @@ import {
 } from '../services/api'
 import { getIST, isMarketOpen, formatISTDate, isPastCutoffWarning } from '../utils/time'
 import SignalCard from '../components/SignalCard'
+import { sendLocalNotification } from '../services/notifications'
 
 function formatPnL(value: number): string {
   const sign = value >= 0 ? '+' : ''
@@ -200,7 +201,12 @@ export default function DashboardScreen() {
   const handleRunScreener = useCallback(async () => {
     setScreenerLoading(true)
     try {
-      await runScreener()
+      const result = await runScreener() as { count?: number } | null
+      const count = result?.count ?? 0
+      sendLocalNotification(
+        'Screener Complete',
+        `${count} signal${count !== 1 ? 's' : ''} ready for today`,
+      ).catch(() => null)
       navigation.navigate('Signals')
     } catch {
       Alert.alert('Screener', 'Failed to run screener. Please try again.')
@@ -212,7 +218,12 @@ export default function DashboardScreen() {
   const handleScanIntraday = useCallback(async () => {
     setIntradayLoading(true)
     try {
-      await scanIntraday()
+      const result = await scanIntraday() as { count?: number } | null
+      const count = result?.count ?? 0
+      sendLocalNotification(
+        'Intraday Scan',
+        `${count} intraday signal${count !== 1 ? 's' : ''} found`,
+      ).catch(() => null)
       navigation.navigate('Signals')
     } catch {
       Alert.alert('Intraday Scan', 'Failed to scan. Please try again.')

@@ -25,6 +25,7 @@ import {
 } from '../services/api'
 import type { Trade, MonthlySummary, TradeCreate } from '../types'
 import TradeRow, { BookLevel } from '../components/TradeRow'
+import { sendLocalNotification } from '../services/notifications'
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -532,6 +533,12 @@ export default function JournalScreen() {
       if (!pendingTrade || !pendingLevel) return
       const updated = await bookLevelApi(pendingTrade.id, pendingLevel, exitPremium)
       setTrades(prev => prev.map(t => (t.id === updated.id ? updated : t)))
+      if (pendingLevel === 'T1') {
+        sendLocalNotification(
+          'T1 Booked ✅',
+          '30% profit locked. SL moved to entry.',
+        ).catch(() => null)
+      }
       setBookModalVisible(false)
       setPendingTrade(null)
       setPendingLevel(null)
