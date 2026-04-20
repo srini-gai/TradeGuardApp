@@ -95,6 +95,46 @@ function SummaryHeader({ summary }: { summary: MonthlySummary }) {
   )
 }
 
+// ─── Filter Tabs ───────────────────────────────────────────────────────────────
+
+interface FilterTabsProps {
+  trades: Trade[]
+  active: FilterKey
+  onChange: (key: FilterKey) => void
+}
+
+function FilterTabs({ trades, active, onChange }: FilterTabsProps) {
+  return (
+    <ScrollView
+      horizontal
+      showsHorizontalScrollIndicator={false}
+      style={filterStyles.scroll}
+      contentContainerStyle={filterStyles.content}
+    >
+      {FILTERS.map(f => {
+        const count = countByFilter(trades, f.key)
+        const isActive = active === f.key
+        return (
+          <TouchableOpacity
+            key={f.key}
+            style={[filterStyles.tab, isActive && filterStyles.tabActive]}
+            onPress={() => onChange(f.key)}
+            activeOpacity={0.8}
+          >
+            <Text style={[filterStyles.text, isActive && filterStyles.textActive]}>
+              {f.label}
+              {'  '}
+              <Text style={[filterStyles.count, isActive && filterStyles.countActive]}>
+                {count}
+              </Text>
+            </Text>
+          </TouchableOpacity>
+        )
+      })}
+    </ScrollView>
+  )
+}
+
 // ─── Log Trade Modal ───────────────────────────────────────────────────────────
 
 interface LogTradeModalProps {
@@ -180,157 +220,146 @@ function LogTradeModal({ visible, onClose, onSubmit }: LogTradeModalProps) {
       animationType="slide"
       onRequestClose={onClose}
     >
-      <Pressable style={logStyles.backdrop} onPress={onClose} />
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        style={logStyles.kvWrapper}
-        keyboardVerticalOffset={0}
-      >
-        <View style={logStyles.sheet}>
-          <View style={logStyles.handle} />
-          <Text style={logStyles.sheetTitle}>Log New Trade</Text>
+      {/* Full-screen container: backdrop behind, sheet at bottom */}
+      <View style={modalStyles.overlay}>
+        <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        >
+          <View style={modalStyles.sheet}>
+            <View style={modalStyles.handle} />
+            <Text style={modalStyles.sheetTitle}>Log New Trade</Text>
 
-          <ScrollView
-            showsVerticalScrollIndicator={false}
-            keyboardShouldPersistTaps="handled"
-          >
-            <Text style={logStyles.fieldLabel}>Symbol</Text>
-            <TextInput
-              style={logStyles.input}
-              value={symbol}
-              onChangeText={v => setSymbol(v.toUpperCase())}
-              placeholder="e.g. RELIANCE"
-              placeholderTextColor={colors.muted}
-              autoCapitalize="characters"
-              returnKeyType="next"
-            />
+            <ScrollView
+              showsVerticalScrollIndicator={false}
+              keyboardShouldPersistTaps="handled"
+            >
+              <Text style={logStyles.fieldLabel}>Symbol</Text>
+              <TextInput
+                style={logStyles.input}
+                value={symbol}
+                onChangeText={v => setSymbol(v.toUpperCase())}
+                placeholder="e.g. RELIANCE"
+                placeholderTextColor={colors.muted}
+                autoCapitalize="characters"
+                returnKeyType="next"
+              />
 
-            <Text style={logStyles.fieldLabel}>Direction</Text>
-            <View style={logStyles.toggle}>
-              <TouchableOpacity
-                style={[
-                  logStyles.toggleBtn,
-                  direction === 'CE' && logStyles.toggleActiveCE,
-                ]}
-                onPress={() => setDirection('CE')}
-                activeOpacity={0.8}
-              >
-                <Text style={[
-                  logStyles.toggleText,
-                  direction === 'CE' && logStyles.toggleTextCE,
-                ]}>
-                  CE
-                </Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[
-                  logStyles.toggleBtn,
-                  direction === 'PE' && logStyles.toggleActivePE,
-                ]}
-                onPress={() => setDirection('PE')}
-                activeOpacity={0.8}
-              >
-                <Text style={[
-                  logStyles.toggleText,
-                  direction === 'PE' && logStyles.toggleTextPE,
-                ]}>
-                  PE
-                </Text>
-              </TouchableOpacity>
-            </View>
-
-            <View style={logStyles.row2}>
-              <View style={logStyles.half}>
-                <Text style={logStyles.fieldLabel}>Strike</Text>
-                <TextInput
-                  style={logStyles.input}
-                  value={strike}
-                  onChangeText={setStrike}
-                  placeholder="e.g. 2500"
-                  placeholderTextColor={colors.muted}
-                  keyboardType="numeric"
-                />
+              <Text style={logStyles.fieldLabel}>Direction</Text>
+              <View style={logStyles.toggle}>
+                <TouchableOpacity
+                  style={[logStyles.toggleBtn, direction === 'CE' && logStyles.toggleActiveCE]}
+                  onPress={() => setDirection('CE')}
+                  activeOpacity={0.8}
+                >
+                  <Text style={[logStyles.toggleText, direction === 'CE' && logStyles.toggleTextCE]}>
+                    CE
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[logStyles.toggleBtn, direction === 'PE' && logStyles.toggleActivePE]}
+                  onPress={() => setDirection('PE')}
+                  activeOpacity={0.8}
+                >
+                  <Text style={[logStyles.toggleText, direction === 'PE' && logStyles.toggleTextPE]}>
+                    PE
+                  </Text>
+                </TouchableOpacity>
               </View>
-              <View style={logStyles.half}>
-                <Text style={logStyles.fieldLabel}>Expiry</Text>
-                <TextInput
-                  style={logStyles.input}
-                  value={expiry}
-                  onChangeText={v => setExpiry(v.toUpperCase())}
-                  placeholder="e.g. 25JAN"
-                  placeholderTextColor={colors.muted}
-                  autoCapitalize="characters"
-                />
-              </View>
-            </View>
 
-            <Text style={logStyles.fieldLabel}>Entry Premium</Text>
-            <TextInput
-              style={logStyles.input}
-              value={entryPremium}
-              onChangeText={setEntryPremium}
-              placeholder="e.g. 120"
-              placeholderTextColor={colors.muted}
-              keyboardType="decimal-pad"
-            />
-
-            {entryNum > 0 && (
-              <View style={logStyles.autoBox}>
-                <Text style={logStyles.autoTitle}>Auto-calculated levels</Text>
-                <View style={logStyles.autoRow}>
-                  {autoLevels.map(l => (
-                    <View key={l.label} style={logStyles.autoItem}>
-                      <Text style={[logStyles.autoItemLabel, { color: l.color }]}>
-                        {l.label}
-                      </Text>
-                      <Text style={[logStyles.autoItemValue, { color: l.color }]}>
-                        ₹{l.value}
-                      </Text>
-                    </View>
-                  ))}
+              <View style={logStyles.row2}>
+                <View style={logStyles.half}>
+                  <Text style={logStyles.fieldLabel}>Strike</Text>
+                  <TextInput
+                    style={logStyles.input}
+                    value={strike}
+                    onChangeText={setStrike}
+                    placeholder="e.g. 2500"
+                    placeholderTextColor={colors.muted}
+                    keyboardType="numeric"
+                  />
+                </View>
+                <View style={logStyles.half}>
+                  <Text style={logStyles.fieldLabel}>Expiry</Text>
+                  <TextInput
+                    style={logStyles.input}
+                    value={expiry}
+                    onChangeText={v => setExpiry(v.toUpperCase())}
+                    placeholder="e.g. 25JAN"
+                    placeholderTextColor={colors.muted}
+                    autoCapitalize="characters"
+                  />
                 </View>
               </View>
-            )}
 
-            <View style={logStyles.row2}>
-              <View style={logStyles.half}>
-                <Text style={logStyles.fieldLabel}>Lots</Text>
-                <TextInput
-                  style={logStyles.input}
-                  value={lots}
-                  onChangeText={setLots}
-                  keyboardType="numeric"
-                />
+              <Text style={logStyles.fieldLabel}>Entry Premium</Text>
+              <TextInput
+                style={logStyles.input}
+                value={entryPremium}
+                onChangeText={setEntryPremium}
+                placeholder="e.g. 120"
+                placeholderTextColor={colors.muted}
+                keyboardType="decimal-pad"
+              />
+
+              {entryNum > 0 && (
+                <View style={logStyles.autoBox}>
+                  <Text style={logStyles.autoTitle}>Auto-calculated levels</Text>
+                  <View style={logStyles.autoRow}>
+                    {autoLevels.map(l => (
+                      <View key={l.label} style={logStyles.autoItem}>
+                        <Text style={[logStyles.autoItemLabel, { color: l.color }]}>
+                          {l.label}
+                        </Text>
+                        <Text style={[logStyles.autoItemValue, { color: l.color }]}>
+                          ₹{l.value}
+                        </Text>
+                      </View>
+                    ))}
+                  </View>
+                </View>
+              )}
+
+              <View style={logStyles.row2}>
+                <View style={logStyles.half}>
+                  <Text style={logStyles.fieldLabel}>Lots</Text>
+                  <TextInput
+                    style={logStyles.input}
+                    value={lots}
+                    onChangeText={setLots}
+                    keyboardType="numeric"
+                  />
+                </View>
+                <View style={logStyles.half}>
+                  <Text style={logStyles.fieldLabel}>Lot Size</Text>
+                  <TextInput
+                    style={logStyles.input}
+                    value={lotSize}
+                    onChangeText={setLotSize}
+                    keyboardType="numeric"
+                  />
+                </View>
               </View>
-              <View style={logStyles.half}>
-                <Text style={logStyles.fieldLabel}>Lot Size</Text>
-                <TextInput
-                  style={logStyles.input}
-                  value={lotSize}
-                  onChangeText={setLotSize}
-                  keyboardType="numeric"
-                />
-              </View>
-            </View>
 
-            <View style={{ height: 16 }} />
+              <View style={logStyles.spacer} />
 
-            <TouchableOpacity
-              style={[logStyles.submitBtn, submitting && logStyles.submitBtnDisabled]}
-              onPress={handleSubmit}
-              disabled={submitting}
-              activeOpacity={0.8}
-            >
-              {submitting
-                ? <ActivityIndicator size="small" color={colors.bg} />
-                : <Text style={logStyles.submitText}>Log Trade</Text>
-              }
-            </TouchableOpacity>
+              <TouchableOpacity
+                style={[logStyles.submitBtn, submitting && logStyles.submitBtnDisabled]}
+                onPress={handleSubmit}
+                disabled={submitting}
+                activeOpacity={0.8}
+              >
+                {submitting
+                  ? <ActivityIndicator size="small" color={colors.bg} />
+                  : <Text style={logStyles.submitText}>Log Trade</Text>
+                }
+              </TouchableOpacity>
 
-            <View style={{ height: 32 }} />
-          </ScrollView>
-        </View>
-      </KeyboardAvoidingView>
+              <View style={logStyles.bottomPad} />
+            </ScrollView>
+          </View>
+        </KeyboardAvoidingView>
+      </View>
     </Modal>
   )
 }
@@ -388,63 +417,60 @@ function BookingModal({
       animationType="slide"
       onRequestClose={onClose}
     >
-      <Pressable style={bookStyles.backdrop} onPress={onClose} />
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        style={bookStyles.kvWrapper}
-        keyboardVerticalOffset={0}
-      >
-        <View style={bookStyles.sheet}>
-          <View style={bookStyles.handle} />
-          <Text style={bookStyles.title}>
-            Book {level ?? ''}
-          </Text>
-          <Text style={bookStyles.subtitle}>Enter exit premium</Text>
+      <View style={modalStyles.overlay}>
+        <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        >
+          <View style={modalStyles.sheet}>
+            <View style={modalStyles.handle} />
+            <Text style={modalStyles.sheetTitle}>Book {level ?? ''}</Text>
+            <Text style={bookStyles.subtitle}>Enter exit premium</Text>
 
-          <TextInput
-            style={[bookStyles.input, { borderColor: accentColor }]}
-            value={exitInput}
-            onChangeText={setExitInput}
-            placeholder="Exit premium"
-            placeholderTextColor={colors.muted}
-            keyboardType="decimal-pad"
-            autoFocus={visible}
-          />
+            <TextInput
+              style={[bookStyles.input, { borderColor: accentColor }]}
+              value={exitInput}
+              onChangeText={setExitInput}
+              placeholder="Exit premium"
+              placeholderTextColor={colors.muted}
+              keyboardType="decimal-pad"
+            />
 
-          {suggestedPrice !== null && (
-            <Text style={[bookStyles.suggestion, { color: accentColor }]}>
-              Target: ₹{suggestedPrice}
-            </Text>
-          )}
+            {suggestedPrice !== null && (
+              <Text style={[bookStyles.suggestion, { color: accentColor }]}>
+                Target: ₹{suggestedPrice}
+              </Text>
+            )}
 
-          <View style={bookStyles.btnRow}>
-            <TouchableOpacity
-              style={bookStyles.cancelBtn}
-              onPress={onClose}
-              activeOpacity={0.8}
-            >
-              <Text style={bookStyles.cancelText}>Cancel</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[
-                bookStyles.confirmBtn,
-                { backgroundColor: accentColor },
-                submitting && bookStyles.confirmBtnDisabled,
-              ]}
-              onPress={handleConfirm}
-              disabled={submitting}
-              activeOpacity={0.8}
-            >
-              {submitting
-                ? <ActivityIndicator size="small" color={colors.bg} />
-                : <Text style={bookStyles.confirmText}>Confirm</Text>
-              }
-            </TouchableOpacity>
+            <View style={bookStyles.btnRow}>
+              <TouchableOpacity
+                style={bookStyles.cancelBtn}
+                onPress={onClose}
+                activeOpacity={0.8}
+              >
+                <Text style={bookStyles.cancelText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  bookStyles.confirmBtn,
+                  { backgroundColor: accentColor },
+                  submitting && bookStyles.confirmBtnDisabled,
+                ]}
+                onPress={handleConfirm}
+                disabled={submitting}
+                activeOpacity={0.8}
+              >
+                {submitting
+                  ? <ActivityIndicator size="small" color={colors.bg} />
+                  : <Text style={bookStyles.confirmText}>Confirm</Text>
+                }
+              </TouchableOpacity>
+            </View>
+
+            <View style={bookStyles.bottomPad} />
           </View>
-
-          <View style={{ height: 24 }} />
-        </View>
-      </KeyboardAvoidingView>
+        </KeyboardAvoidingView>
+      </View>
     </Modal>
   )
 }
@@ -522,54 +548,12 @@ export default function JournalScreen() {
     getMonthlySummary().then(setSummary).catch(() => null)
   }, [])
 
-  const listHeader = (
-    <>
-      {summary && <SummaryHeader summary={summary} />}
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        style={styles.filterScroll}
-        contentContainerStyle={styles.filterContent}
-      >
-        {FILTERS.map(f => {
-          const count = countByFilter(trades, f.key)
-          const isActive = filter === f.key
-          return (
-            <TouchableOpacity
-              key={f.key}
-              style={[styles.filterTab, isActive && styles.filterTabActive]}
-              onPress={() => setFilter(f.key)}
-              activeOpacity={0.8}
-            >
-              <Text style={[styles.filterText, isActive && styles.filterTextActive]}>
-                {f.label}{' '}
-                <Text style={[styles.filterCount, isActive && styles.filterCountActive]}>
-                  {count}
-                </Text>
-              </Text>
-            </TouchableOpacity>
-          )
-        })}
-      </ScrollView>
-    </>
-  )
-
-  const listEmpty = (
-    <View style={styles.empty}>
-      <Text style={styles.emptyTitle}>No trades</Text>
-      <Text style={styles.emptyText}>
-        {filter === 'ALL'
-          ? 'Tap + to log your first trade'
-          : `No ${filter === 'SL_HIT' ? 'SL hit' : filter.toLowerCase()} trades`}
-      </Text>
-    </View>
-  )
-
   return (
     <SafeAreaView style={styles.safe}>
-      <View style={styles.header}>
+      {/* Screen header */}
+      <View style={styles.topBar}>
         <Text style={styles.title}>Journal</Text>
-        <Text style={styles.headerSub}>
+        <Text style={styles.titleSub}>
           {trades.length} trade{trades.length !== 1 ? 's' : ''}
         </Text>
       </View>
@@ -580,7 +564,14 @@ export default function JournalScreen() {
           <Text style={styles.loadingText}>Loading journal…</Text>
         </View>
       ) : (
-        <>
+        <View style={styles.content}>
+          {/* Monthly summary — fixed above list */}
+          {summary && <SummaryHeader summary={summary} />}
+
+          {/* Filter tabs — fixed above list, outside FlatList to avoid nested scroll issues */}
+          <FilterTabs trades={trades} active={filter} onChange={setFilter} />
+
+          {/* Trade list */}
           <FlatList
             data={filteredTrades}
             keyExtractor={item => item.id.toString()}
@@ -594,19 +585,30 @@ export default function JournalScreen() {
                 colors={[colors.accent]}
               />
             }
-            ListHeaderComponent={listHeader}
-            ListEmptyComponent={listEmpty}
+            ListEmptyComponent={
+              <View style={styles.empty}>
+                <Text style={styles.emptyTitle}>No trades</Text>
+                <Text style={styles.emptyText}>
+                  {filter === 'ALL'
+                    ? 'Tap + to log your first trade'
+                    : `No ${filter === 'SL_HIT' ? 'SL hit' : filter.toLowerCase()} trades`}
+                </Text>
+              </View>
+            }
             showsVerticalScrollIndicator={false}
           />
+        </View>
+      )}
 
-          <TouchableOpacity
-            style={styles.fab}
-            onPress={() => setLogModalVisible(true)}
-            activeOpacity={0.85}
-          >
-            <Text style={styles.fabIcon}>+</Text>
-          </TouchableOpacity>
-        </>
+      {/* FAB */}
+      {!loading && (
+        <TouchableOpacity
+          style={styles.fab}
+          onPress={() => setLogModalVisible(true)}
+          activeOpacity={0.85}
+        >
+          <Text style={styles.fabIcon}>+</Text>
+        </TouchableOpacity>
       )}
 
       <LogTradeModal
@@ -632,7 +634,7 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: colors.bg,
   },
-  header: {
+  topBar: {
     flexDirection: 'row',
     alignItems: 'baseline',
     gap: 8,
@@ -648,9 +650,14 @@ const styles = StyleSheet.create({
     color: colors.text,
     letterSpacing: 0.2,
   },
-  headerSub: {
+  titleSub: {
     fontSize: 12,
     color: colors.muted,
+  },
+  content: {
+    flex: 1,
+    paddingHorizontal: 16,
+    paddingTop: 14,
   },
   loadingCenter: {
     flex: 1,
@@ -663,42 +670,8 @@ const styles = StyleSheet.create({
     color: colors.subtext,
   },
   listContent: {
-    padding: 16,
     paddingBottom: 96,
-  },
-  filterScroll: {
-    marginBottom: 14,
-  },
-  filterContent: {
-    gap: 8,
-    paddingRight: 4,
-  },
-  filterTab: {
-    paddingHorizontal: 14,
-    paddingVertical: 7,
-    borderRadius: 20,
-    backgroundColor: colors.surface,
-    borderWidth: 0.5,
-    borderColor: colors.border,
-  },
-  filterTabActive: {
-    backgroundColor: 'rgba(0,212,170,0.12)',
-    borderColor: colors.accent,
-  },
-  filterText: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: colors.muted,
-  },
-  filterTextActive: {
-    color: colors.accent,
-  },
-  filterCount: {
-    fontSize: 11,
-    color: colors.muted,
-  },
-  filterCountActive: {
-    color: colors.accent,
+    paddingTop: 2,
   },
   empty: {
     alignItems: 'center',
@@ -744,7 +717,7 @@ const summaryStyles = StyleSheet.create({
     backgroundColor: colors.card,
     borderRadius: 12,
     padding: 14,
-    marginBottom: 14,
+    marginBottom: 12,
     borderWidth: 0.5,
     borderColor: colors.border,
   },
@@ -782,16 +755,50 @@ const summaryStyles = StyleSheet.create({
   },
 })
 
-const logStyles = StyleSheet.create({
-  backdrop: {
+const filterStyles = StyleSheet.create({
+  scroll: {
+    marginBottom: 12,
+  },
+  content: {
+    flexDirection: 'row',
+    gap: 8,
+    paddingRight: 4,
+  },
+  tab: {
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+    borderRadius: 20,
+    backgroundColor: colors.surface,
+    borderWidth: 0.5,
+    borderColor: colors.border,
+  },
+  tabActive: {
+    backgroundColor: 'rgba(0,212,170,0.12)',
+    borderColor: colors.accent,
+  },
+  text: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: colors.muted,
+  },
+  textActive: {
+    color: colors.accent,
+  },
+  count: {
+    fontSize: 11,
+    color: colors.muted,
+  },
+  countActive: {
+    color: colors.accent,
+  },
+})
+
+// Shared modal shell styles
+const modalStyles = StyleSheet.create({
+  overlay: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.55)',
-  },
-  kvWrapper: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
+    justifyContent: 'flex-end',
   },
   sheet: {
     backgroundColor: colors.surface,
@@ -815,6 +822,9 @@ const logStyles = StyleSheet.create({
     color: colors.text,
     marginBottom: 18,
   },
+})
+
+const logStyles = StyleSheet.create({
   fieldLabel: {
     fontSize: 10,
     color: colors.muted,
@@ -907,6 +917,9 @@ const logStyles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '600',
   },
+  spacer: {
+    height: 16,
+  },
   submitBtn: {
     backgroundColor: colors.accent,
     borderRadius: 12,
@@ -924,44 +937,17 @@ const logStyles = StyleSheet.create({
     color: colors.bg,
     letterSpacing: 0.2,
   },
+  bottomPad: {
+    height: 32,
+  },
 })
 
 const bookStyles = StyleSheet.create({
-  backdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.55)',
-  },
-  kvWrapper: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-  },
-  sheet: {
-    backgroundColor: colors.surface,
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    paddingHorizontal: 20,
-    paddingTop: 10,
-  },
-  handle: {
-    alignSelf: 'center',
-    width: 36,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: colors.border,
-    marginBottom: 16,
-  },
-  title: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: colors.text,
-    marginBottom: 4,
-  },
   subtitle: {
     fontSize: 12,
     color: colors.subtext,
     marginBottom: 18,
+    marginTop: -10,
   },
   input: {
     backgroundColor: colors.card,
@@ -1014,5 +1000,8 @@ const bookStyles = StyleSheet.create({
     fontWeight: '700',
     color: colors.bg,
     letterSpacing: 0.2,
+  },
+  bottomPad: {
+    height: 24,
   },
 })
