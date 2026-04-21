@@ -6,6 +6,7 @@ import type { Signal } from '../types'
 interface Props {
   signal: Signal
   onLogTrade?: (signal: Signal) => void
+  onSimulate?: (signal: Signal) => void
   compact?: boolean
 }
 
@@ -73,7 +74,7 @@ function ProfitLadder({ signal }: { signal: Signal }) {
   )
 }
 
-function SignalCard({ signal, onLogTrade, compact = false }: Props) {
+function SignalCard({ signal, onLogTrade, onSimulate, compact = false }: Props) {
   const isCE = signal.direction === 'CE'
   const accentColor = isCE ? colors.bull : colors.bear
   const days = daysToExpiry(signal.expiry, signal.days_to_expiry)
@@ -134,15 +135,24 @@ function SignalCard({ signal, onLogTrade, compact = false }: Props) {
         </View>
       )}
 
-      {/* Log Trade button */}
+      {/* Action buttons */}
       {!compact && (
-        <TouchableOpacity
-          style={[styles.logBtn, { backgroundColor: accentColor }]}
-          onPress={() => onLogTrade?.(signal)}
-          activeOpacity={0.8}
-        >
-          <Text style={styles.logBtnText}>Log Trade</Text>
-        </TouchableOpacity>
+        <View style={styles.btnRow}>
+          <TouchableOpacity
+            style={[styles.logBtn, { backgroundColor: accentColor }]}
+            onPress={() => onLogTrade?.(signal)}
+            activeOpacity={0.8}
+          >
+            <Text style={styles.logBtnText}>Log Trade</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.simulateBtn}
+            onPress={() => onSimulate?.(signal)}
+            activeOpacity={0.8}
+          >
+            <Text style={styles.simulateBtnText}>Simulate</Text>
+          </TouchableOpacity>
+        </View>
       )}
     </View>
   )
@@ -237,8 +247,13 @@ const styles = StyleSheet.create({
     fontSize: 10,
     color: colors.subtext,
   },
-  logBtn: {
+  btnRow: {
+    flexDirection: 'row',
+    gap: 8,
     marginTop: 12,
+  },
+  logBtn: {
+    flex: 1,
     borderRadius: 10,
     paddingVertical: 11,
     alignItems: 'center',
@@ -247,6 +262,21 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '700',
     color: '#000',
+    letterSpacing: 0.3,
+  },
+  simulateBtn: {
+    flex: 1,
+    borderRadius: 10,
+    paddingVertical: 11,
+    alignItems: 'center',
+    borderWidth: 1.5,
+    borderColor: '#ea580c',
+    backgroundColor: 'rgba(234,88,12,0.1)',
+  },
+  simulateBtnText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#ea580c',
     letterSpacing: 0.3,
   },
 })

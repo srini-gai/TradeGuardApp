@@ -24,6 +24,7 @@ import {
 import { getIST, isMarketOpen, formatISTTime, countdownTo3PM } from '../utils/time'
 import SignalCard from '../components/SignalCard'
 import IntradaySignalCard from '../components/IntradaySignalCard'
+import { openPaperTrade } from '../services/paperTrading'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -169,9 +170,11 @@ function IntradayExitBanner() {
 function SwingTab({
   confFilter,
   onNavigateJournal,
+  onSimulate,
 }: {
   confFilter: ConfFilter
   onNavigateJournal: () => void
+  onSimulate: (signal: Signal) => void
 }) {
   const [signals, setSignals] = useState<Signal[]>([])
   const [loading, setLoading] = useState(true)
@@ -240,6 +243,7 @@ function SwingTab({
             <SignalCard
               signal={item}
               onLogTrade={onNavigateJournal}
+              onSimulate={onSimulate}
             />
           )}
           refreshControl={
@@ -269,9 +273,11 @@ function SwingTab({
 function IntradayTab({
   confFilter,
   onNavigateJournal,
+  onSimulate,
 }: {
   confFilter: ConfFilter
   onNavigateJournal: () => void
+  onSimulate: (signal: IntradaySignal) => void
 }) {
   const [signals, setSignals] = useState<IntradaySignal[]>([])
   const [loading, setLoading] = useState(true)
@@ -348,6 +354,7 @@ function IntradayTab({
             <IntradaySignalCard
               signal={item}
               onLogTrade={onNavigateJournal}
+              onSimulate={onSimulate}
             />
           )}
           refreshControl={
@@ -385,6 +392,24 @@ export default function SignalsScreen() {
     navigation.navigate('Journal')
   }, [navigation])
 
+  const handleSimulateSwing = useCallback(async (signal: Signal) => {
+    try {
+      await openPaperTrade(signal)
+      Alert.alert('Paper Trade Opened', `${signal.symbol} ${signal.direction} added to simulation`)
+    } catch (e) {
+      Alert.alert('Error', e instanceof Error ? e.message : 'Could not open paper trade')
+    }
+  }, [])
+
+  const handleSimulateIntraday = useCallback(async (signal: IntradaySignal) => {
+    try {
+      await openPaperTrade(signal)
+      Alert.alert('Paper Trade Opened', `${signal.symbol} ${signal.direction} added to simulation`)
+    } catch (e) {
+      Alert.alert('Error', e instanceof Error ? e.message : 'Could not open paper trade')
+    }
+  }, [])
+
   // Reset filter when switching tabs
   const handleTabChange = useCallback((t: Tab) => {
     setActiveTab(t)
@@ -406,9 +431,9 @@ export default function SignalsScreen() {
 
       {/* Tab content */}
       {activeTab === 'swing' ? (
-        <SwingTab confFilter={confFilter} onNavigateJournal={handleNavigateJournal} />
+        <SwingTab confFilter={confFilter} onNavigateJournal={handleNavigateJournal} onSimulate={handleSimulateSwing} />
       ) : (
-        <IntradayTab confFilter={confFilter} onNavigateJournal={handleNavigateJournal} />
+        <IntradayTab confFilter={confFilter} onNavigateJournal={handleNavigateJournal} onSimulate={handleSimulateIntraday} />
       )}
     </SafeAreaView>
   )

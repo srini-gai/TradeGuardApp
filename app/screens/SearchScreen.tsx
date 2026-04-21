@@ -13,6 +13,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { colors } from '../constants'
 import { getNifty500, analyseSymbol, getStrikes, logTrade } from '../services/api'
+import { openPaperTrade } from '../services/paperTrading'
 import type { Nifty500Symbol, StockAnalysis } from '../types'
 import SignalCard from '../components/SignalCard'
 
@@ -639,6 +640,15 @@ export default function SearchScreen() {
     }
   }, [selectedSymbol])
 
+  const handleSimulate = useCallback(async (signal: import('../types').Signal) => {
+    try {
+      await openPaperTrade(signal)
+      Alert.alert('Paper Trade Opened', `${signal.symbol} ${signal.direction} added to simulation`)
+    } catch (e) {
+      Alert.alert('Error', e instanceof Error ? e.message : 'Could not open paper trade')
+    }
+  }, [])
+
   const handleClear = useCallback(() => {
     setQuery('')
     setSelectedSymbol(null)
@@ -732,7 +742,7 @@ export default function SearchScreen() {
                 {analysis.qualified && analysis.signal && direction === analysis.signal.direction && (
                   <View style={styles.signalSection}>
                     <Text style={styles.sectionTitle}>Signal</Text>
-                    <SignalCard signal={analysis.signal} onLogTrade={handleLogTrade} />
+                    <SignalCard signal={analysis.signal} onLogTrade={handleLogTrade} onSimulate={handleSimulate} />
                   </View>
                 )}
 

@@ -17,6 +17,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage'
 import Constants from 'expo-constants'
 import { colors, WEBHOOK_BASE } from '../constants'
 import NotificationSettingsScreen from './NotificationSettingsScreen'
+import PaperTradingScreen from './PaperTradingScreen'
 import {
   getBacktestSummary,
   runBacktest,
@@ -30,7 +31,7 @@ import type { BacktestSummary, Alert as TradingAlert } from '../types'
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
-type TabId = 'backtest' | 'alerts' | 'settings'
+type TabId = 'backtest' | 'alerts' | 'settings' | 'paper'
 
 interface BacktestRun {
   id: number
@@ -722,6 +723,7 @@ function SettingsTab({ onOpenNotifSettings }: { onOpenNotifSettings: () => void 
 const TABS: Array<{ id: TabId; label: string }> = [
   { id: 'backtest', label: 'Backtest' },
   { id: 'alerts', label: 'Alerts' },
+  { id: 'paper', label: 'Paper' },
   { id: 'settings', label: 'Settings' },
 ]
 
@@ -763,6 +765,7 @@ export default function MoreScreen() {
       <View style={styles.content}>
         {activeTab === 'backtest' && <BacktestTab />}
         {activeTab === 'alerts' && <AlertsTab />}
+        {activeTab === 'paper' && <PaperTradingScreen />}
         {activeTab === 'settings' && (
           <SettingsTab onOpenNotifSettings={() => setShowNotifSettings(true)} />
         )}
