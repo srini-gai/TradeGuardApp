@@ -49,7 +49,11 @@ function formatPnL(value: number): string {
 function getBookableTargets(trade: Trade): BookLevel[] {
   if (trade.status === 'CLOSED' || trade.status === 'SL_HIT') return []
   const booked = new Set(trade.bookings.map(b => b.level))
-  return (['T1', 'T2', 'T3', 'SL'] as BookLevel[]).filter(l => !booked.has(l))
+  if (booked.has('SL')) return []
+  if (!booked.has('T1')) return ['T1', 'SL']
+  if (!booked.has('T2')) return ['T2', 'SL']
+  if (!booked.has('T3')) return ['T3', 'SL']
+  return []
 }
 
 function levelPrice(trade: Trade, level: BookLevel): number {
@@ -199,7 +203,7 @@ function TradeRow({ trade, onBook }: Props) {
           <PriceLadder trade={trade} />
 
           {/* Booking buttons */}
-          {bookableTargets.length > 0 && (
+          {bookableTargets.length > 0 ? (
             <View style={styles.bookingRow}>
               {bookableTargets.map(level => (
                 <TouchableOpacity
@@ -222,7 +226,11 @@ function TradeRow({ trade, onBook }: Props) {
                 </TouchableOpacity>
               ))}
             </View>
-          )}
+          ) : (trade.status === 'OPEN' || trade.status === 'PARTIAL') ? (
+            <View style={styles.allBookedRow}>
+              <Text style={styles.allBookedText}>All targets hit ✓</Text>
+            </View>
+          ) : null}
 
           {/* Bookings history */}
           <BookingsHistory trade={trade} />
@@ -357,6 +365,16 @@ const styles = StyleSheet.create({
   },
   bookBtnTextSL: {
     color: colors.bear,
+  },
+  allBookedRow: {
+    marginTop: 12,
+    alignItems: 'center',
+    paddingVertical: 6,
+  },
+  allBookedText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: colors.bull,
   },
   notes: {
     marginTop: 8,

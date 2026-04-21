@@ -17,6 +17,33 @@ import { openPaperTrade } from '../services/paperTrading'
 import type { Nifty500Symbol, StockAnalysis } from '../types'
 import SignalCard from '../components/SignalCard'
 
+// ─── Helpers ───────────────────────────────────────────────────────────────────
+
+function toISODate(raw: string): string {
+  if (!raw) return raw
+  // Already YYYY-MM-DD
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw
+  // Try parsing anything Date understands
+  const d = new Date(raw)
+  if (!isNaN(d.getTime())) {
+    return d.toISOString().slice(0, 10)
+  }
+  return raw
+}
+
+function apiErrorMessage(e: unknown): string {
+  if (e && typeof e === 'object') {
+    const err = e as { response?: { data?: { detail?: string; message?: string } }; message?: string }
+    return (
+      err.response?.data?.detail ??
+      err.response?.data?.message ??
+      err.message ??
+      'Unknown error'
+    )
+  }
+  return String(e)
+}
+
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
 interface StrikeLtp {
@@ -593,23 +620,26 @@ export default function SearchScreen() {
   }, [])
 
   const handleLogTrade = useCallback(async (signal: import('../types').Signal) => {
+    const payload = {
+      symbol: signal.symbol,
+      direction: signal.direction,
+      strike: signal.strike,
+      expiry: toISODate(signal.expiry),
+      entry_premium: signal.entry_premium,
+      lots: 1,
+      lot_size: 1,
+      sl_premium: signal.sl_premium,
+      t1_premium: signal.t1_premium,
+      t2_premium: signal.t2_premium,
+      t3_premium: signal.t3_premium,
+    }
+    console.log('[SearchScreen] logTrade payload:', JSON.stringify(payload))
     try {
-      await logTrade({
-        symbol: signal.symbol,
-        direction: signal.direction,
-        strike: signal.strike,
-        expiry: signal.expiry,
-        entry_premium: signal.entry_premium,
-        lots: 1,
-        lot_size: 1,
-        sl_premium: signal.sl_premium,
-        t1_premium: signal.t1_premium,
-        t2_premium: signal.t2_premium,
-        t3_premium: signal.t3_premium,
-      })
+      await logTrade(payload)
       Alert.alert('Success', 'Trade logged successfully')
-    } catch {
-      Alert.alert('Error', 'Failed to log trade')
+    } catch (e: unknown) {
+      const msg = apiErrorMessage(e)
+      Alert.alert('Failed to log trade', msg)
     }
   }, [])
 
@@ -620,23 +650,26 @@ export default function SearchScreen() {
     expiry: string,
   ) => {
     if (!selectedSymbol) return
+    const payload = {
+      symbol: selectedSymbol,
+      direction: dir,
+      strike,
+      expiry: toISODate(expiry),
+      entry_premium: ladder.entry,
+      lots: 1,
+      lot_size: 1,
+      sl_premium: ladder.sl,
+      t1_premium: ladder.t1,
+      t2_premium: ladder.t2,
+      t3_premium: ladder.t3,
+    }
+    console.log('[SearchScreen] logStrikeTrade payload:', JSON.stringify(payload))
     try {
-      await logTrade({
-        symbol: selectedSymbol,
-        direction: dir,
-        strike,
-        expiry,
-        entry_premium: ladder.entry,
-        lots: 1,
-        lot_size: 1,
-        sl_premium: ladder.sl,
-        t1_premium: ladder.t1,
-        t2_premium: ladder.t2,
-        t3_premium: ladder.t3,
-      })
+      await logTrade(payload)
       Alert.alert('Success', 'Trade logged successfully')
-    } catch {
-      Alert.alert('Error', 'Failed to log trade')
+    } catch (e: unknown) {
+      const msg = apiErrorMessage(e)
+      Alert.alert('Failed to log trade', msg)
     }
   }, [selectedSymbol])
 

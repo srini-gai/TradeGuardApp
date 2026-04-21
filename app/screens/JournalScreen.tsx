@@ -136,6 +136,20 @@ function FilterTabs({ trades, active, onChange }: FilterTabsProps) {
   )
 }
 
+// ─── Lot size lookup ───────────────────────────────────────────────────────────
+
+const LOT_SIZES: Record<string, number> = {
+  NIFTY: 75, BANKNIFTY: 30, FINNIFTY: 65, MIDCPNIFTY: 75,
+  RELIANCE: 250, TCS: 150, HDFCBANK: 550, INFY: 300, ICICIBANK: 700,
+  SBIN: 1500, BHARTIARTL: 500, KOTAKBANK: 400, LT: 150, AXISBANK: 1200,
+  WIPRO: 1500, HCLTECH: 350, TATAMOTORS: 700, SUNPHARMA: 350, BAJFINANCE: 125,
+  MARUTI: 100, TITAN: 175, ADANIPORTS: 1250, NTPC: 2250, POWERGRID: 2900,
+  ONGC: 1925, COALINDIA: 2100, JSWSTEEL: 675, TATASTEEL: 5500, HINDALCO: 2100,
+  DRREDDY: 125, CIPLA: 650, DIVISLAB: 200, SIEMENS: 275, HAVELLS: 500,
+  ZOMATO: 4500, DMART: 75, IRCTC: 875, HAL: 200, BEL: 4500,
+  PERSISTENT: 150, COFORGE: 150, TATAELXSI: 100, JUBLFOOD: 1250,
+}
+
 // ─── Log Trade Modal ───────────────────────────────────────────────────────────
 
 interface LogTradeModalProps {
@@ -153,12 +167,20 @@ function LogTradeModal({ visible, onClose, onSubmit }: LogTradeModalProps) {
   const [lots, setLots] = useState('1')
   const [lotSize, setLotSize] = useState('50')
   const [submitting, setSubmitting] = useState(false)
+  const [submitAttempted, setSubmitAttempted] = useState(false)
 
   const entryNum = parseFloat(entryPremium) || 0
   const autoSL = entryNum > 0 ? parseFloat((entryNum * 0.5).toFixed(1)) : 0
   const autoT1 = entryNum > 0 ? parseFloat((entryNum * 1.5).toFixed(1)) : 0
   const autoT2 = entryNum > 0 ? parseFloat((entryNum * 2.0).toFixed(1)) : 0
   const autoT3 = entryNum > 0 ? parseFloat((entryNum * 3.0).toFixed(1)) : 0
+
+  function handleSymbolChange(v: string) {
+    const sym = v.toUpperCase()
+    setSymbol(sym)
+    const known = LOT_SIZES[sym]
+    if (known) setLotSize(known.toString())
+  }
 
   function reset() {
     setSymbol('')
@@ -168,20 +190,34 @@ function LogTradeModal({ visible, onClose, onSubmit }: LogTradeModalProps) {
     setEntryPremium('')
     setLots('1')
     setLotSize('50')
+    setSubmitAttempted(false)
   }
 
   async function handleSubmit() {
-    if (!symbol.trim() || !strike || !expiry.trim() || !entryPremium) {
-      Alert.alert('Missing fields', 'Symbol, Strike, Expiry and Entry Premium are required.')
+    setSubmitAttempted(true)
+    if (!symbol.trim()) {
+      Alert.alert('Validation', 'Symbol is required.')
+      return
+    }
+    if (!strike.trim()) {
+      Alert.alert('Validation', 'Strike is required.')
+      return
+    }
+    if (!expiry.trim()) {
+      Alert.alert('Validation', 'Expiry is required (YYYY-MM-DD).')
+      return
+    }
+    if (!entryPremium.trim()) {
+      Alert.alert('Validation', 'Entry Premium is required.')
       return
     }
     const strikeNum = parseInt(strike, 10)
     if (isNaN(strikeNum) || strikeNum <= 0) {
-      Alert.alert('Invalid input', 'Strike must be a positive number.')
+      Alert.alert('Validation', 'Strike must be a positive number.')
       return
     }
     if (isNaN(entryNum) || entryNum <= 0) {
-      Alert.alert('Invalid input', 'Entry premium must be a positive number.')
+      Alert.alert('Validation', 'Entry Premium must be a positive number.')
       return
     }
     setSubmitting(true)
@@ -190,10 +226,10 @@ function LogTradeModal({ visible, onClose, onSubmit }: LogTradeModalProps) {
         symbol: symbol.trim().toUpperCase(),
         direction,
         strike: strikeNum,
-        expiry: expiry.trim().toUpperCase(),
+        expiry: expiry.trim(),
         entry_premium: entryNum,
         lots: Math.max(1, parseInt(lots, 10) || 1),
-        lot_size: Math.max(1, parseInt(lotSize, 10) || 50),
+        lot_size: Math.max(1, parseInt(lotSize, 10) || 1),
         sl_premium: autoSL,
         t1_premium: autoT1,
         t2_premium: autoT2,
@@ -207,12 +243,8 @@ function LogTradeModal({ visible, onClose, onSubmit }: LogTradeModalProps) {
     }
   }
 
-  const autoLevels = [
-    { label: 'SL', value: autoSL, color: colors.bear },
-    { label: 'T1', value: autoT1, color: colors.accent },
-    { label: 'T2', value: autoT2, color: colors.accent },
-    { label: 'T3', value: autoT3, color: colors.bull },
-  ]
+  const strikeInvalid = submitAttempted && !strike.trim()
+  const expiryInvalid = submitAttempted && !expiry.trim()
 
   return (
     <Modal
@@ -239,7 +271,7 @@ function LogTradeModal({ visible, onClose, onSubmit }: LogTradeModalProps) {
               <TextInput
                 style={logStyles.input}
                 value={symbol}
-                onChangeText={v => setSymbol(v.toUpperCase())}
+                onChangeText={handleSymbolChange}
                 placeholder="e.g. RELIANCE"
                 placeholderTextColor={colors.muted}
                 autoCapitalize="characters"
@@ -270,9 +302,9 @@ function LogTradeModal({ visible, onClose, onSubmit }: LogTradeModalProps) {
 
               <View style={logStyles.row2}>
                 <View style={logStyles.half}>
-                  <Text style={logStyles.fieldLabel}>Strike</Text>
+                  <Text style={logStyles.fieldLabel}>Strike *</Text>
                   <TextInput
-                    style={logStyles.input}
+                    style={[logStyles.input, strikeInvalid && logStyles.inputError]}
                     value={strike}
                     onChangeText={setStrike}
                     placeholder="e.g. 2500"
@@ -281,19 +313,20 @@ function LogTradeModal({ visible, onClose, onSubmit }: LogTradeModalProps) {
                   />
                 </View>
                 <View style={logStyles.half}>
-                  <Text style={logStyles.fieldLabel}>Expiry</Text>
+                  <Text style={logStyles.fieldLabel}>Expiry *</Text>
                   <TextInput
-                    style={logStyles.input}
+                    style={[logStyles.input, expiryInvalid && logStyles.inputError]}
                     value={expiry}
-                    onChangeText={v => setExpiry(v.toUpperCase())}
-                    placeholder="e.g. 25JAN"
+                    onChangeText={setExpiry}
+                    placeholder="2026-04-30"
                     placeholderTextColor={colors.muted}
-                    autoCapitalize="characters"
+                    keyboardType="numeric"
                   />
+                  <Text style={logStyles.fieldHint}>YYYY-MM-DD</Text>
                 </View>
               </View>
 
-              <Text style={logStyles.fieldLabel}>Entry Premium</Text>
+              <Text style={logStyles.fieldLabel}>Entry Premium *</Text>
               <TextInput
                 style={logStyles.input}
                 value={entryPremium}
@@ -302,23 +335,10 @@ function LogTradeModal({ visible, onClose, onSubmit }: LogTradeModalProps) {
                 placeholderTextColor={colors.muted}
                 keyboardType="decimal-pad"
               />
-
               {entryNum > 0 && (
-                <View style={logStyles.autoBox}>
-                  <Text style={logStyles.autoTitle}>Auto-calculated levels</Text>
-                  <View style={logStyles.autoRow}>
-                    {autoLevels.map(l => (
-                      <View key={l.label} style={logStyles.autoItem}>
-                        <Text style={[logStyles.autoItemLabel, { color: l.color }]}>
-                          {l.label}
-                        </Text>
-                        <Text style={[logStyles.autoItemValue, { color: l.color }]}>
-                          ₹{l.value}
-                        </Text>
-                      </View>
-                    ))}
-                  </View>
-                </View>
+                <Text style={logStyles.levelHint}>
+                  {`SL ₹${autoSL} · T1 ₹${autoT1} · T2 ₹${autoT2} · T3 ₹${autoT3}`}
+                </Text>
               )}
 
               <View style={logStyles.row2}>
@@ -890,39 +910,22 @@ const logStyles = StyleSheet.create({
   half: {
     flex: 1,
   },
-  autoBox: {
-    backgroundColor: colors.card,
-    borderRadius: 10,
-    padding: 12,
-    marginTop: 10,
-    borderWidth: 0.5,
-    borderColor: colors.border,
+  inputError: {
+    borderColor: colors.bear,
+    borderWidth: 1,
   },
-  autoTitle: {
-    fontSize: 9,
+  fieldHint: {
+    fontSize: 10,
     color: colors.muted,
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-    marginBottom: 8,
+    marginTop: 4,
+    marginLeft: 2,
   },
-  autoRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-  },
-  autoItem: {
-    alignItems: 'center',
-    flex: 1,
-  },
-  autoItemLabel: {
-    fontSize: 9,
-    fontWeight: '700',
-    textTransform: 'uppercase',
-    letterSpacing: 0.4,
-    marginBottom: 3,
-  },
-  autoItemValue: {
-    fontSize: 12,
-    fontWeight: '600',
+  levelHint: {
+    fontSize: 11,
+    color: colors.muted,
+    marginTop: 6,
+    marginLeft: 2,
+    letterSpacing: 0.2,
   },
   spacer: {
     height: 16,
