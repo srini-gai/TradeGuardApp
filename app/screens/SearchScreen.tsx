@@ -717,6 +717,11 @@ export default function SearchScreen() {
               </TouchableOpacity>
             )}
             ItemSeparatorComponent={() => <View style={styles.dropdownSep} />}
+            ListEmptyComponent={
+              <View style={styles.dropdownEmpty}>
+                <Text style={styles.dropdownEmptyText}>No symbols found</Text>
+              </View>
+            }
             keyboardShouldPersistTaps="handled"
             showsVerticalScrollIndicator={false}
             style={styles.dropdown}
@@ -879,6 +884,14 @@ const styles = StyleSheet.create({
     height: 0.5,
     backgroundColor: colors.border,
     marginHorizontal: 14,
+  },
+  dropdownEmpty: {
+    alignItems: 'center',
+    paddingVertical: 24,
+  },
+  dropdownEmptyText: {
+    fontSize: 13,
+    color: colors.muted,
   },
   results: {
     flex: 1,

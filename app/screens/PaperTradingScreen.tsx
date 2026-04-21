@@ -266,6 +266,12 @@ export default function PaperTradingScreen() {
       )}
       ListHeaderComponent={listHeader}
       ListFooterComponent={listFooter}
+      ListEmptyComponent={
+        <View style={styles.emptyState}>
+          <Text style={styles.emptyTitle}>No trades</Text>
+          <Text style={styles.emptySub}>Open a paper trade from the Signals tab</Text>
+        </View>
+      }
       contentContainerStyle={styles.listContent}
       showsVerticalScrollIndicator={false}
     />
@@ -281,6 +287,19 @@ const styles = StyleSheet.create({
   listContent: {
     paddingHorizontal: 16,
     paddingTop: 8,
+    flexGrow: 1,
+  },
+  emptyState: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 48,
+    gap: 6,
+  },
+  emptyTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: colors.subtext,
   },
   portfolioCard: {
     backgroundColor: colors.card,

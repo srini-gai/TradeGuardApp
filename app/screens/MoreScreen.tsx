@@ -553,6 +553,13 @@ function AlertsTab() {
       keyExtractor={item => String(item.id)}
       renderItem={({ item }) => <AlertRow item={item} />}
       ListHeaderComponent={listHeader}
+      ListEmptyComponent={
+        !loading ? (
+          <View style={alertStyles.empty}>
+            <Text style={alertStyles.emptyText}>No alerts yet</Text>
+          </View>
+        ) : null
+      }
       contentContainerStyle={alertStyles.content}
       showsVerticalScrollIndicator={false}
       keyboardShouldPersistTaps="handled"
@@ -1121,6 +1128,15 @@ const alertStyles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingTop: 4,
     paddingBottom: 32,
+    flexGrow: 1,
+  },
+  empty: {
+    alignItems: 'center',
+    paddingVertical: 40,
+  },
+  emptyText: {
+    fontSize: 13,
+    color: colors.muted,
   },
   toggle: {
     flexDirection: 'row',

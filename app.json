@@ -7,7 +7,8 @@
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "dark",
     "splash": {
-      "backgroundColor": "#0a0e1a"
+      "backgroundColor": "#0a0e1a",
+      "resizeMode": "contain"
     },
     "assetBundlePatterns": ["**/*"],
     "ios": {
@@ -18,8 +19,9 @@
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#0a0e1a"
       },
-      "package": "tech.tradegard.app",
-      "permissions": ["NOTIFICATIONS", "RECEIVE_BOOT_COMPLETED"]
+      "package": "com.srinigai.tradeguard",
+      "versionCode": 1,
+      "permissions": ["NOTIFICATIONS", "INTERNET", "VIBRATE", "RECEIVE_BOOT_COMPLETED"]
     },
     "plugins": [
       ["expo-notifications", {

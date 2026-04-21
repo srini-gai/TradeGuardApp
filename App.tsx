@@ -3,6 +3,7 @@ import { AppState, AppStateStatus } from 'react-native'
 import { StatusBar } from 'expo-status-bar'
 import { GestureHandlerRootView } from 'react-native-gesture-handler'
 import Navigation from './app/navigation'
+import ErrorBoundary from './app/components/ErrorBoundary'
 import {
   registerForPushNotifications,
   scheduleMorningReminder,
@@ -37,8 +38,10 @@ export default function App() {
 
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
-      <StatusBar style="light" backgroundColor="#0a0e1a" />
-      <Navigation />
+      <ErrorBoundary>
+        <StatusBar style="light" backgroundColor="#0a0e1a" />
+        <Navigation />
+      </ErrorBoundary>
     </GestureHandlerRootView>
   )
 }
