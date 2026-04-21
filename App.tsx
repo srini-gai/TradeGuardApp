@@ -8,10 +8,8 @@ import {
   scheduleMorningReminder,
   scheduleIntradayReminder,
   scheduleExitReminder,
-  sendLocalNotification,
 } from './app/services/notifications'
 import { checkPaperTradeAlerts } from './app/services/paperTrading'
-import { getTodaySignals } from './app/services/api'
 
 export default function App() {
   const appStateRef = useRef<AppStateStatus>(AppState.currentState)
@@ -27,14 +25,7 @@ export default function App() {
     const sub = AppState.addEventListener('change', async (nextState) => {
       if (appStateRef.current.match(/inactive|background/) && nextState === 'active') {
         try {
-          const res = await getTodaySignals()
-          const alerts = await checkPaperTradeAlerts(res.signals)
-          for (const alert of alerts) {
-            await sendLocalNotification(
-              `Paper Trade Alert — ${alert.symbol}`,
-              `${alert.level} target hit for your ${alert.symbol} paper trade`,
-            )
-          }
+          await checkPaperTradeAlerts()
         } catch {
           // silent — foreground check is best-effort
         }

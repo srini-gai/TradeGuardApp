@@ -89,3 +89,20 @@ export const sendTestWebhook = () =>
   axios.post('https://tradegard.tech/webhook/test', {
     symbol: 'TEST', action: 'ALERT', price: 1234.5,
   }).then(r => r.data)
+
+// Options live price
+export interface OptionsPriceResult {
+  symbol: string
+  strike: number
+  direction: 'CE' | 'PE'
+  ltp: number
+  expiry: string
+}
+
+export const getOptionsPrice = (
+  symbol: string,
+  strike: number,
+  direction: 'CE' | 'PE',
+  expiry: string,
+): Promise<OptionsPriceResult> =>
+  api.get(`/data/premium/${symbol}/${strike}/${direction}`, { params: { expiry } }).then(r => r.data)

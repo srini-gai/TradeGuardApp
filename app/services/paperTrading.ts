@@ -1,5 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import type { Signal, IntradaySignal } from '../types'
+import { getOptionsPrice } from './api'
+import { sendLocalNotification } from './notifications'
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -195,31 +197,36 @@ export async function resetPaperPortfolio(): Promise<void> {
 }
 
 // ─── Alert check (called on app foreground) ──────────────────────────────────
+// Fetches live LTP for each open trade and auto-books/closes at SL / T1 / T2 / T3.
 
-export async function checkPaperTradeAlerts(
-  todaySignals: Signal[],
-): Promise<Array<{ symbol: string; level: string; tradeId: string }>> {
+export async function checkPaperTradeAlerts(): Promise<void> {
   const p = await loadPortfolio()
   const open = p.trades.filter(t => t.status === 'OPEN' || t.status === 'PARTIAL')
-  const result: Array<{ symbol: string; level: string; tradeId: string }> = []
 
   for (const trade of open) {
-    const sig = todaySignals.find(
-      s => s.symbol === trade.symbol && s.direction === trade.direction,
-    )
-    if (!sig) continue
+    let ltp: number
+    try {
+      const priceData = await getOptionsPrice(trade.symbol, trade.strike, trade.direction, trade.expiry)
+      ltp = priceData.ltp
+    } catch {
+      continue
+    }
 
-    const currentPremium = sig.entry_premium
     const bookedLevels = new Set(trade.bookings.map(b => b.level))
 
-    if (!bookedLevels.has('T1') && currentPremium >= trade.t1) {
-      result.push({ symbol: trade.symbol, level: 'T1', tradeId: trade.id })
-    } else if (!bookedLevels.has('T2') && currentPremium >= trade.t2) {
-      result.push({ symbol: trade.symbol, level: 'T2', tradeId: trade.id })
-    } else if (!bookedLevels.has('T3') && currentPremium >= trade.t3) {
-      result.push({ symbol: trade.symbol, level: 'T3', tradeId: trade.id })
+    if (ltp <= trade.sl) {
+      await closePaperTrade(trade.id, trade.sl)
+      await sendLocalNotification('🔴 SL Hit', `${trade.symbol} paper trade stopped out`)
+    } else if (!bookedLevels.has('T1') && ltp >= trade.t1) {
+      await bookPaperLevel(trade.id, 'T1', trade.t1)
+      await sendLocalNotification('✅ T1 Hit', `${trade.symbol} — 30% booked automatically`)
+    } else if (bookedLevels.has('T1') && !bookedLevels.has('T2') && ltp >= trade.t2) {
+      await bookPaperLevel(trade.id, 'T2', trade.t2)
+      await sendLocalNotification('✅ T2 Hit', `${trade.symbol} — T2 booked automatically`)
+    } else if (bookedLevels.has('T2') && !bookedLevels.has('T3') && ltp >= trade.t3) {
+      await bookPaperLevel(trade.id, 'T3', trade.t3)
+      await closePaperTrade(trade.id, trade.t3)
+      await sendLocalNotification('✅ T3 Hit', `${trade.symbol} — T3 hit, trade closed`)
     }
   }
-
-  return result
 }
